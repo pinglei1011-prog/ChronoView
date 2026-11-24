@@ -1,6 +1,6 @@
 [project]
 name = "chronoview"
-version = "0.1.0"
+version = "1.0.0"
 description = "Read-only Windows local photo and video timeline browser"
 requires-python = ">=3.12,<3.14"
 dependencies = ["PySide6==6.10.3", "Pillow==12.3.0"]

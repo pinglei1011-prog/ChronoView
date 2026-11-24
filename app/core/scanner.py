@@ -18,6 +18,9 @@ class ScanResult:
     cancelled: bool = False
     unavailable: bool = False
     directories: int = 0
+    from_index: bool = False
+    offline: bool = False
+    index_warning: str = ""
 
     def add_error(self, path: Path, exc: OSError) -> None:
         self.error_count += 1

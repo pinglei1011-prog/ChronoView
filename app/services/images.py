@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 from PySide6.QtGui import QImage
 
 
@@ -29,3 +29,13 @@ def read_image(path: Path, edge: int | None = None) -> QImage:
         data = image.tobytes("raw", "RGBA")
         return QImage(data, image.width, image.height, image.width * 4,
                       QImage.Format.Format_RGBA8888).copy()
+
+
+def image_error_message(error: Exception) -> str:
+    if isinstance(error, FileNotFoundError):
+        return "原文件不存在或移动硬盘未连接。请检查硬盘，盘符变化后重新选择文件夹。"
+    if isinstance(error, PermissionError):
+        return "没有读取此文件的权限，或文件正被其他程序占用。"
+    if isinstance(error, UnidentifiedImageError):
+        return "无法识别此照片的内容，文件可能损坏或实际格式不受支持。"
+    return str(error)

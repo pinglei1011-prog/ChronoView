@@ -131,3 +131,35 @@ def test_refresh_can_retry_previously_missing_photo(tmp_path, qapp):
         assert not service.get(item)[1]
     finally:
         service.shutdown()
+
+
+def test_stale_index_uses_current_photo_and_current_disk_cache(tmp_path, qapp):
+    import hashlib
+    import os
+    original = tmp_path / "originals"
+    original.mkdir()
+    path = original / "IMG20261016103000.jpg"
+    Image.new("RGB", (120, 60), "red").save(path)
+    stale = scan_library(original).items[0]
+    cache = tmp_path / "cache"
+    service = ThumbnailService(cache)
+    service.get(stale)
+    wait_until(qapp, lambda: cache_key(stale) in service.memory)
+    service.shutdown()
+    Image.new("RGB", (160, 80), "blue").save(path)
+    os.utime(path, ns=(stale.mtime_ns + 2_000_000_000, stale.mtime_ns + 2_000_000_000))
+    current = scan_library(original).items[0]
+    before = (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest())
+    service = ThumbnailService(cache)
+    try:
+        service.get(stale)
+        wait_until(qapp, lambda: cache_key(stale) in service.memory)
+        pixmap, error = service.get(stale)
+        assert not error and not pixmap.isNull()
+        pixel = pixmap.toImage().pixelColor(10, 10)
+        assert pixel.blue() > 200 and pixel.red() < 30
+        assert (cache / f"{cache_key(current)}.png").is_file()
+        assert cache_key(current) != cache_key(stale)
+        assert (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) == before
+    finally:
+        service.shutdown()

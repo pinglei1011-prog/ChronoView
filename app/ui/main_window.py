@@ -5,19 +5,25 @@ import time
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QSettings, QStandardPaths, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QProgressBar, QPushButton,
-                               QSlider, QStackedWidget, QTreeWidget, QTreeWidgetItem,
+from PySide6.QtCore import QSettings, QSize, QStandardPaths, QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+                               QListView, QSlider, QStackedWidget, QStyledItemDelegate, QToolButton, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from app.core.library import calendar_counts, filter_items, sort_items
+from app.core.albums import calendar_albums
 from app.core.scanner import ScanResult, scan_library
 from app.services.thumbnail_service import ThumbnailService
 from app.ui.photo_grid import PhotoGrid
+from app.ui.album_grid import AlbumGrid
+from app.ui.calendar_tree import CalendarTree
+from app.ui.privacy_page import InAppPrivacyPage
 from app.ui.photo_viewer import PhotoViewer
-from app.ui.theme import stylesheet
+from app.ui.theme import asset_path, stylesheet
+from app.storage.index import LibraryIndex
+from app import __display_version__
 
 
 class ScanThread(QThread):
@@ -25,11 +31,12 @@ class ScanThread(QThread):
     progress = Signal(int, int)
     result_ready = Signal(object)
 
-    def __init__(self, root: Path, parent=None):
+    def __init__(self, root: Path, parent=None, index_path=None, prefer_index=False):
         super().__init__(parent)
         self.root = root
         self.cancel = Event()
         self.last_progress = 0.0
+        self.index_path, self.prefer_index = index_path, prefer_index
 
     def report(self, files, directories):
         now = time.monotonic()
@@ -39,7 +46,28 @@ class ScanThread(QThread):
 
     def run(self):
         try:
+            index = LibraryIndex(self.index_path) if self.index_path else None
+            if index and self.prefer_index:
+                try:
+                    cached = index.load(self.root)
+                except Exception:
+                    logging.exception("Cannot restore library index; scanning instead")
+                    cached = None
+                if cached is not None:
+                    try:
+                        offline = not self.root.is_dir()
+                    except OSError:
+                        offline = True
+                    self.result_ready.emit(ScanResult(items=cached, from_index=True, offline=offline,
+                                                      cancelled=self.cancel.is_set()))
+                    return
             result = scan_library(self.root, self.cancel, self.report, self.batch_ready.emit)
+            if index and not (result.cancelled or result.unavailable or result.error_count):
+                try:
+                    index.save(self.root, result.items)
+                except Exception as exc:
+                    logging.exception("Cannot save library index")
+                    result.index_warning = f"本地索引保存失败，下次启动将重新扫描：{exc}"
         except Exception as exc:
             logging.exception("Scan failed")
             result = ScanResult(unavailable=True, errors=[str(exc)], error_count=1)
@@ -51,15 +79,30 @@ class MainWindow(QMainWindow):
                  auto_load: bool = True):
         super().__init__()
         self.settings = settings if settings is not None else QSettings()
+        data_path = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
+        if self.settings.format() == QSettings.Format.IniFormat:
+            data_path = Path(self.settings.fileName()).parent
+        self.index_path = data_path / "library.sqlite3"
         self.items = []
-        self.route = ("all",)
-        self.root = Path(str(self.settings.value("library", ""))) if self.settings.value("library") else None
+        self.visible_items = []
+        self.route = ("privacy",) if auto_load else ("all",)
+        self.resume_route = ("all",)
+        self.private_banner_visible = False
+        self.remember_library = self.settings.value("remember_library", True, type=bool)
+        if not self.remember_library:
+            self.settings.remove("library")
+        self.root = Path(str(self.settings.value("library"))) if self.settings.value("library") else None
+        self.pending_library = initial_library
+        # auto_load=False is the manual setup mode used by diagnostics/tests.
+        # Normal startup opens the main interface on its neutral privacy page.
+        self.startup_pending = auto_load
         self.scan = None
         self.scan_result = None
         self.scan_root = None
         self.snapshot = []
         self.dirty = False
         self.dark = self.settings.value("dark", False, type=bool)
+        self.sidebar_visible = self.settings.value("sidebar_visible", True, type=bool)
         self.setWindowTitle("ChronoView · 我的照片")
         self.resize(1280, 850)
         self.setMinimumSize(880, 580)
@@ -74,24 +117,27 @@ class MainWindow(QMainWindow):
         self.preview_timer.timeout.connect(self.preview_scan)
         QShortcut(QKeySequence("F5"), self, activated=self.refresh)
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_folder)
-        if auto_load:
-            target = initial_library or self.root
-            if target:
-                QTimer.singleShot(0, lambda: self.start_scan(target))
+        QShortcut(QKeySequence("Ctrl+B"), self, activated=self.toggle_sidebar)
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=self.show_privacy)
 
     def build_ui(self):
         central = QWidget()
         outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        sidebar = QFrame()
+        self.sidebar = sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(238)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(20, 26, 16, 20)
         brand = QLabel("ChronoView")
         brand.setObjectName("brand")
-        side.addWidget(brand)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(6)
+        brand_row.addWidget(brand, 1)
+        self.hide_sidebar_button = self.sidebar_button("隐藏侧边栏", "sidebar-hide.svg")
+        brand_row.addWidget(self.hide_sidebar_button)
+        side.addLayout(brand_row)
         subtitle = QLabel("让每个瞬间，回到时间里")
         subtitle.setObjectName("muted")
         side.addWidget(subtitle)
@@ -99,7 +145,9 @@ class MainWindow(QMainWindow):
         section = QLabel("我的照片")
         section.setObjectName("section")
         side.addWidget(section)
-        self.navigation = QTreeWidget()
+        self.privacy_button = self.make_privacy_button()
+        side.addWidget(self.privacy_button)
+        self.navigation = CalendarTree()
         self.navigation.setHeaderHidden(True)
         self.navigation.setIndentation(14)
         self.navigation.itemSelectionChanged.connect(self.navigate)
@@ -119,10 +167,17 @@ class MainWindow(QMainWindow):
         self.refresh_button = QPushButton("刷新照片库  ·  F5")
         self.refresh_button.clicked.connect(self.refresh)
         side.addWidget(self.refresh_button)
-        footer = QLabel("本地浏览 · 原始文件只读\nv0.1  第一阶段")
+        self.remember_checkbox = QCheckBox("记住照片库位置")
+        self.remember_checkbox.setChecked(self.remember_library)
+        self.remember_checkbox.toggled.connect(self.set_remember_library)
+        side.addWidget(self.remember_checkbox)
+        footer = QLabel(f"本地浏览 · 原始文件只读\n{__display_version__}  照片与视频")
         footer.setObjectName("muted")
         side.addSpacing(12)
         side.addWidget(footer)
+        about = QPushButton("关于与许可证")
+        about.clicked.connect(self.show_about)
+        side.addWidget(about)
         outer.addWidget(sidebar)
         content = QWidget()
         content.setObjectName("content")
@@ -130,6 +185,9 @@ class MainWindow(QMainWindow):
         main.setContentsMargins(28, 25, 24, 12)
         main.setSpacing(14)
         header = QHBoxLayout()
+        header.setSpacing(12)
+        self.show_sidebar_button = self.sidebar_button("显示侧边栏", "sidebar-show.svg")
+        header.addWidget(self.show_sidebar_button, 0, Qt.AlignmentFlag.AlignTop)
         titles = QVBoxLayout()
         self.heading = QLabel("全部照片")
         self.heading.setObjectName("heading")
@@ -137,23 +195,43 @@ class MainWindow(QMainWindow):
         self.counts = QLabel("0 张照片 · 0 个视频")
         self.counts.setObjectName("subtitle")
         titles.addWidget(self.counts)
+        self.browse_hint = QLabel()
+        self.browse_hint.setObjectName("muted")
+        titles.addWidget(self.browse_hint)
         header.addLayout(titles, 1)
+        self.privacy_action = self.make_privacy_button()
+        header.addWidget(self.privacy_action)
         self.theme_button = QPushButton()
         self.theme_button.clicked.connect(self.toggle_theme)
         header.addWidget(self.theme_button)
         main.addLayout(header)
         tools = QHBoxLayout()
-        self.back_button = QPushButton("← 返回")
+        self.back_button = QPushButton("返回")
+        self.back_button.setObjectName("backButton")
+        self.back_button.setIcon(QIcon(str(asset_path("back.svg"))))
+        self.back_button.setIconSize(QSize(20, 20))
+        self.back_button.setFixedHeight(36)
+        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.back_button.clicked.connect(self.go_back)
         tools.addWidget(self.back_button)
         self.sort_box = QComboBox()
-        self.sort_box.addItems(["从新到旧  ▾", "从旧到新  ▾"])
+        self.sort_box.addItems(["从新到旧", "从旧到新"])
+        self.sort_box.setCurrentIndex(1)
+        sort_view = QListView(self.sort_box)
+        sort_view.setObjectName("sortPopup")
+        sort_view.setUniformItemSizes(True)
+        sort_view.setSpacing(0)
+        sort_view.setWordWrap(False)
+        sort_view.setItemDelegate(QStyledItemDelegate(sort_view))
+        sort_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sort_box.setView(sort_view)
+        self.sort_box.setMaxVisibleItems(2)
         self.sort_box.currentIndexChanged.connect(lambda: self.update_view())
         tools.addWidget(self.sort_box)
         tools.addStretch()
-        size_label = QLabel("缩略图")
-        size_label.setObjectName("muted")
-        tools.addWidget(size_label)
+        self.size_label = QLabel("卡片大小")
+        self.size_label.setObjectName("muted")
+        tools.addWidget(self.size_label)
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(110, 280)
         self.size_slider.setValue(self.settings.value("thumbnail_size", 180, type=int))
@@ -166,10 +244,16 @@ class MainWindow(QMainWindow):
         self.banner.hide()
         main.addWidget(self.banner)
         self.pages = QStackedWidget()
+        self.albums = AlbumGrid(self)
+        self.albums.opened.connect(self.select_route)
+        self.albums.set_thumbnail_size(self.size_slider.value())
         self.grid = PhotoGrid(self.thumbnails)
         self.grid.set_thumbnail_size(self.size_slider.value())
-        self.size_slider.valueChanged.connect(self.grid.set_thumbnail_size)
-        self.grid.doubleClicked.connect(self.open_item)
+        self.size_slider.valueChanged.connect(self.set_card_size)
+        self.grid.doubleClicked.connect(lambda index: self.open_item(index)
+                                       if index.data(Qt.ItemDataRole.UserRole).kind == "image" else None)
+        self.grid.clicked.connect(lambda index: self.open_item(index)
+                                 if index.data(Qt.ItemDataRole.UserRole).kind == "video" else None)
         for key in ("Return", "Enter"):
             shortcut = QShortcut(QKeySequence(key), self.grid,
                                  activated=lambda: self.open_item(self.grid.currentIndex()))
@@ -198,11 +282,16 @@ class MainWindow(QMainWindow):
         self.empty_choose = empty_choose
         empty_layout.addWidget(empty_choose, alignment=Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch()
+        self.pages.addWidget(self.albums)
         self.pages.addWidget(self.grid)
         self.pages.addWidget(self.empty)
+        self.safe_page = InAppPrivacyPage()
+        self.safe_page.resume.clicked.connect(self.resume_browsing)
+        self.pages.addWidget(self.safe_page)
         main.addWidget(self.pages, 1)
         outer.addWidget(content, 1)
-        self.setCentralWidget(central)
+        self.browser = central
+        self.setCentralWidget(self.browser)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
@@ -214,12 +303,87 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress)
         self.statusBar().addPermanentWidget(self.cancel_button)
         self.statusBar().showMessage("选择文件夹开始浏览 · 支持中文路径与移动硬盘")
+        self.set_sidebar_visible(self.sidebar_visible, persist=False)
+
+    def sidebar_button(self, label, icon):
+        button = QToolButton()
+        button.setObjectName("sidebarToggle")
+        button.setFixedSize(32, 32)
+        button.setIconSize(QSize(22, 22))
+        button.setIcon(QIcon(str(asset_path(icon))))
+        button.setToolTip(f"{label} · Ctrl+B")
+        button.setAccessibleName(label)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(self.toggle_sidebar)
+        return button
+
+    def make_privacy_button(self):
+        button = QPushButton("隐私页")
+        button.setObjectName("privacyNavigation")
+        button.setIcon(QIcon(str(asset_path("privacy.svg"))))
+        button.setIconSize(QSize(20, 20))
+        button.setCheckable(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip("隐藏照片和视频 · Ctrl+L")
+        button.clicked.connect(self.show_privacy)
+        return button
+
+    def show_privacy(self):
+        if self.route != ("privacy",):
+            self.resume_route = self.route
+            self.private_banner_visible = not self.banner.isHidden()
+        self.route = ("privacy",)
+        self.thumbnails.set_paused(True)
+        viewer = getattr(self, "active_viewer", None)
+        if viewer is not None:
+            viewer.close()
+        self.rebuild_navigation()
+        self.update_view()
+        self.safe_page.resume.setFocus()
+
+    def resume_browsing(self):
+        if self.route != ("privacy",):
+            return
+        if self.startup_pending:
+            self.open_previous_library()
+            return
+        route = self.resume_route
+        if route[0] == "unknown" and not any(item.taken_at is None for item in self.items):
+            route = ("all",)
+        self.select_route(route)
+
+    def toggle_sidebar(self):
+        self.set_sidebar_visible(not self.sidebar_visible)
+
+    def set_sidebar_visible(self, visible: bool, persist: bool = True):
+        focused = self.focusWidget()
+        sidebar_had_focus = focused is not None and self.sidebar.isAncestorOf(focused)
+        self.sidebar_visible = visible
+        self.sidebar.setVisible(visible)
+        self.show_sidebar_button.setVisible(not visible)
+        if sidebar_had_focus and not visible:
+            self.pages.currentWidget().setFocus(Qt.FocusReason.ShortcutFocusReason)
+        if persist:
+            self.settings.setValue("sidebar_visible", visible)
 
     def apply_theme(self):
         self.setStyleSheet(stylesheet(self.dark))
         self.grid.delegate.dark = self.dark
+        self.albums.delegate.dark = self.dark
         self.theme_button.setText("浅色外观" if self.dark else "深色外观")
         self.grid.viewport().update()
+        self.albums.viewport().update()
+
+    def set_card_size(self, edge):
+        self.grid.set_thumbnail_size(edge)
+        self.albums.set_thumbnail_size(edge)
+
+    def show_about(self):
+        QMessageBox.about(self, "关于 ChronoView", f"ChronoView {__display_version__} · 本地照片与视频\n\n"
+                          "使用 Qt / PySide6 6.10.3（LGPLv3）和 FFmpeg 7.1.3（LGPLv2.1+）动态库。\n"
+                          "This software uses libraries from the FFmpeg project under the LGPLv2.1 or later.\n\n"
+                          "完整许可证、归属、构建配置和源码获取说明见绿色版 licenses 文件夹。\n"
+                          "原始照片和视频只读访问。")
 
     def toggle_theme(self):
         self.dark = not self.dark
@@ -236,53 +400,113 @@ class MainWindow(QMainWindow):
     def rebuild_navigation(self):
         self.navigation.blockSignals(True)
         expanded = set()
-        iterator = self.navigation.invisibleRootItem()
-        for i in range(iterator.childCount()):
-            node = iterator.child(i)
+        known = set()
+
+        def remember(node):
+            known.add(node.data(0, Qt.ItemDataRole.UserRole))
             if node.isExpanded():
                 expanded.add(node.data(0, Qt.ItemDataRole.UserRole))
             for j in range(node.childCount()):
-                if node.child(j).isExpanded():
-                    expanded.add(node.child(j).data(0, Qt.ItemDataRole.UserRole))
+                remember(node.child(j))
+
+        for i in range(self.navigation.topLevelItemCount()):
+            remember(self.navigation.topLevelItem(i))
         self.navigation.clear()
-        self.add_nav(self.navigation, "全部照片", ("all",))
-        years = self.add_nav(self.navigation, "按年份", ("years",))
-        months = self.add_nav(self.navigation, "按月份", ("months",))
+        if self.route == ("privacy",):
+            self.add_nav(self.navigation, "全部照片", ("all",))
+            self.navigation.blockSignals(False)
+            return
+        collection = self.add_nav(self.navigation, "全部照片", ("all",))
+        collection.setExpanded(("all",) in expanded or ("all",) not in known)
         counts = calendar_counts(self.items)
-        all_years = sorted({year for year, month in counts}, reverse=True)
+        all_years = sorted({year for year, month in counts})
         for year in all_years:
             count = sum(n for (y, m), n in counts.items() if y == year)
-            year_node = self.add_nav(years, f"{year}年  ·  {count}", ("year", year))
-            for y, month in sorted(counts, reverse=True):
+            year_node = self.add_nav(collection, f"{year}年  ·  {count}", ("year", year))
+            year_node.setToolTip(0, "点击浏览这一年的各个月份")
+            year_node.setExpanded(("year", year) in expanded or self.route == ("year", year))
+            for y, month in sorted(counts):
                 if y == year:
                     self.add_nav(year_node, f"{month}月  ·  {counts[y, month]}", ("month", year, month))
-        for year, month in sorted(counts, reverse=True):
-            self.add_nav(months, f"{year}年{month}月  ·  {counts[year, month]}", ("month", year, month))
         unknown = sum(item.taken_at is None for item in self.items)
-        self.add_nav(self.navigation, f"未识别日期  ·  {unknown}", ("unknown",))
-        for i in range(self.navigation.topLevelItemCount()):
-            node = self.navigation.topLevelItem(i)
-            route = node.data(0, Qt.ItemDataRole.UserRole)
-            node.setExpanded(route in expanded or (route == ("years",) and not expanded))
-            for j in range(node.childCount()):
-                child = node.child(j)
-                child.setExpanded(child.data(0, Qt.ItemDataRole.UserRole) in expanded or
-                                  (len(self.route) > 1 and child.data(0, Qt.ItemDataRole.UserRole) == ("year", self.route[1])))
+        if unknown:
+            self.add_nav(collection, f"未识别日期  ·  {unknown}", ("unknown",))
+        current = self.navigation.currentItem()
+        if current:
+            ancestor = current.parent()
+            while ancestor:
+                ancestor.setExpanded(True)
+                ancestor = ancestor.parent()
         self.navigation.blockSignals(False)
 
     def navigate(self):
         selected = self.navigation.currentItem()
         if selected:
-            self.route = selected.data(0, Qt.ItemDataRole.UserRole)
+            route = selected.data(0, Qt.ItemDataRole.UserRole)
+            if self.route == ("privacy",):
+                self.select_route(route)
+                return
+            self.route = route
             self.update_view()
 
     def go_back(self):
+        if self.route == ("privacy",):
+            return
         self.route = ("year", self.route[1]) if self.route[0] == "month" else ("all",)
         self.rebuild_navigation()
         self.update_view()
 
+    def select_route(self, route):
+        if route == ("privacy",):
+            self.show_privacy()
+            return
+        if self.startup_pending:
+            self.open_previous_library()
+            return
+        was_private = self.route == ("privacy",)
+        self.route = route
+        self.rebuild_navigation()
+        self.update_view()
+        if was_private:
+            self.thumbnails.set_paused(False)
+            if self.private_banner_visible:
+                self.banner.show()
+
     def update_view(self):
         route = self.route
+        hidden = route == ("privacy",)
+        for button in (self.privacy_button, self.privacy_action):
+            button.setChecked(hidden)
+        for widget in (self.counts, self.size_label, self.size_slider, self.refresh_button):
+            widget.setVisible(not hidden)
+        self.statusBar().setVisible(not hidden)
+        if hidden:
+            self.thumbnails.set_paused(True)
+            self.setWindowTitle("ChronoView · 隐私页")
+            self.heading.setText("隐私页")
+            self.browse_hint.setText("照片和视频已隐藏，继续浏览后恢复显示")
+            self.back_button.hide()
+            self.sort_box.hide()
+            self.banner.hide()
+            self.path_label.setText("照片库信息已隐藏")
+            self.path_label.setToolTip("")
+            self.visible_items = []
+            self.grid.media_model.replace([])
+            self.albums.album_model.replace([])
+            if self.startup_pending:
+                self.safe_page.title.setText("从这里开始浏览")
+                self.safe_page.hint.setText("打开照片库后才会显示照片和视频")
+                self.safe_page.resume.setText("打开上次照片库" if self.pending_library or self.root else "打开照片库")
+            else:
+                self.safe_page.title.setText("照片和视频已隐藏")
+                self.safe_page.hint.setText("可以把软件停留在这里\n点击继续浏览，返回刚才的分类")
+                self.safe_page.resume.setText("继续浏览")
+            self.pages.setCurrentWidget(self.safe_page)
+            return
+        self.setWindowTitle("ChronoView · 我的照片")
+        shown_root = self.scan_root if self.scan else self.root
+        self.path_label.setText(str(shown_root) if shown_root else "尚未选择照片库")
+        self.path_label.setToolTip(str(shown_root or ""))
         if route[0] == "year":
             visible = filter_items(self.items, year=route[1])
             heading = f"{route[1]}年"
@@ -294,14 +518,32 @@ class MainWindow(QMainWindow):
             heading = "未识别日期"
         else:
             visible = self.items
-            heading = {"years": "按年份浏览", "months": "按月份浏览"}.get(route[0], "全部照片")
+            heading = "全部照片"
+        self.visible_items = sort_items(visible, self.sort_box.currentIndex() == 0)
         self.heading.setText(heading)
         photos = sum(item.kind == "image" for item in visible)
         videos = len(visible) - photos
         self.counts.setText(f"{photos:,} 张照片  ·  {videos:,} 个视频" + ("  ·  正在扫描" if self.scan else ""))
         self.back_button.setEnabled(route != ("all",))
-        self.grid.media_model.replace(sort_items(visible, self.sort_box.currentIndex() == 0))
-        self.pages.setCurrentWidget(self.grid if visible else self.empty)
+        self.back_button.setVisible(route != ("all",))
+        self.back_button.setText(f"返回 {route[1]}年" if route[0] == "month" else "返回全部照片")
+        self.back_button.setToolTip(f"返回 {route[1]}年的月份列表" if route[0] == "month" else "返回全部照片和视频")
+        self.back_button.setAccessibleName(self.back_button.text())
+        media_page = route[0] != "year"
+        self.sort_box.setVisible(media_page)
+        self.size_label.setText("缩略图" if media_page else "卡片大小")
+        self.browse_hint.setText("全部照片和视频 · 可在左侧按年份、月份浏览" if route[0] == "all" else
+                                 ("选择月份，查看照片和视频" if route[0] == "year" else
+                                  "双击照片查看大图 · 单击视频播放"))
+        if media_page:
+            self.albums.album_model.replace([])
+            self.grid.media_model.replace(self.visible_items)
+            self.pages.setCurrentWidget(self.grid if visible else self.empty)
+        else:
+            self.grid.media_model.replace([])
+            groups = calendar_albums(self.items, route[1])
+            self.albums.album_model.replace(groups)
+            self.pages.setCurrentWidget(self.albums if groups else self.empty)
         if self.scan:
             self.empty_title.setText("正在发现你的照片")
             self.empty_hint.setText("扫描在后台进行，找到的照片会陆续显示。")
@@ -312,14 +554,43 @@ class MainWindow(QMainWindow):
             self.empty_title.setText("这里还没有照片")
             self.empty_hint.setText("此分类没有可显示的文件。可切换分类、刷新照片库或重新选择文件夹。")
 
+    def set_remember_library(self, remember):
+        self.remember_library = remember
+        self.settings.setValue("remember_library", remember)
+        if not remember:
+            self.settings.remove("library")
+            if self.startup_pending:
+                self.root = None
+        elif self.root and not self.scan:
+            self.settings.setValue("library", str(self.root))
+        self.settings.sync()
+        if self.route == ("privacy",):
+            self.update_view()
+
+    def open_previous_library(self):
+        if not self.startup_pending:
+            return
+        target = self.pending_library or self.root
+        if target:
+            self.start_scan(target, prefer_index=self.pending_library is None)
+        else:
+            self.choose_folder()
+            if self.startup_pending:
+                previous = self.navigation.blockSignals(True)
+                self.navigation.setCurrentItem(None)
+                self.navigation.blockSignals(previous)
+
     def choose_folder(self):
         if self.scan:
             return
-        folder = QFileDialog.getExistingDirectory(self, "选择照片库最外层文件夹", str(self.root or Path.home()))
+        initial = Path.home() if self.route == ("privacy",) else self.root or Path.home()
+        folder = QFileDialog.getExistingDirectory(self, "选择照片库最外层文件夹", str(initial))
         if folder:
             self.start_scan(Path(folder))
 
     def refresh(self):
+        if self.route == ("privacy",):
+            return
         if not self.scan:
             self.start_scan(self.root) if self.root else self.choose_folder()
 
@@ -331,20 +602,25 @@ class MainWindow(QMainWindow):
         self.cancel_button.setVisible(busy)
         self.cancel_button.setEnabled(busy)
 
-    def start_scan(self, root: Path):
+    def start_scan(self, root: Path, prefer_index=False):
         if self.scan:
             return
+        self.startup_pending = False
+        self.pending_library = None
+        self.setWindowTitle("ChronoView · 我的照片")
+        self.statusBar().show()
         self.snapshot = self.items
         self.snapshot_route = self.route
         self.items = []
         self.scan_root = root.absolute()
-        if self.root != self.scan_root:
+        if self.root != self.scan_root or self.route == ("privacy",):
             self.route = ("all",)
+            self.thumbnails.set_paused(False)
         self.scan_result = None
         self.banner.hide()
         self.path_label.setText(str(self.scan_root))
         self.path_label.setToolTip(str(self.scan_root))
-        self.scan = ScanThread(self.scan_root, self)
+        self.scan = ScanThread(self.scan_root, self, self.index_path, prefer_index)
         self.scan.batch_ready.connect(self.receive_batch)
         self.scan.progress.connect(lambda files, dirs: self.statusBar().showMessage(
             f"正在扫描 · 已发现 {files:,} 个文件 · {dirs:,} 个文件夹"))
@@ -369,6 +645,7 @@ class MainWindow(QMainWindow):
         self.scan_result = result
 
     def finish_scan(self):
+        was_private = self.route == ("privacy",)
         self.preview_timer.stop()
         result = self.scan_result
         if result is None:
@@ -388,8 +665,19 @@ class MainWindow(QMainWindow):
                 seen = {item.path for item in self.items}
                 self.items.extend(item for item in self.snapshot if item.path not in seen)
             self.root = self.scan_root
-            self.settings.setValue("library", str(self.root))
+            if self.remember_library:
+                self.settings.setValue("library", str(self.root))
+            else:
+                self.settings.remove("library")
             message = f"扫描完成 · {len(self.items):,} 个文件 · {result.directories:,} 个文件夹"
+            if result.from_index:
+                message = f"已从本地索引恢复 {len(self.items):,} 个文件 · 点击刷新照片库检查新增或更改"
+                self.banner.setText("移动硬盘当前不可访问，已保留离线照片库。重新连接后点击刷新，盘符变化可重新选择文件夹。"
+                                    if result.offline else "已恢复上次照片库。新增或更改文件后，点击“刷新照片库”更新。")
+                self.banner.show()
+            if result.index_warning:
+                self.banner.setText(result.index_warning)
+                self.banner.show()
             if result.error_count:
                 message += f" · {result.error_count} 处无法访问（见提示）"
                 self.banner.setText(f"有 {result.error_count} 处无法访问，已跳过；原有未读到的条目已保留。\n" +
@@ -400,9 +688,15 @@ class MainWindow(QMainWindow):
         self.scan = None
         thread.deleteLater()
         self.snapshot = []
+        if self.route == ("unknown",) and not any(item.taken_at is None for item in self.items):
+            self.route = ("all",)
         self.path_label.setText(str(self.root) if self.root else "尚未选择照片库")
         self.path_label.setToolTip(str(self.root or ""))
         self.set_busy(False)
+        if was_private:
+            self.route = ("privacy",)
+        if self.route == ("privacy",):
+            self.private_banner_visible = not self.banner.isHidden()
         self.rebuild_navigation()
         self.update_view()
         self.statusBar().showMessage(message)
@@ -414,15 +708,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("正在取消扫描…")
 
     def open_item(self, index):
-        if not index.isValid() or getattr(self, "viewer_open", False):
+        if self.route == ("privacy",) or not index.isValid() or getattr(self, "viewer_open", False):
             return
         self.viewer_open = True
+        self.thumbnails.set_paused(True)
         try:
             viewer = PhotoViewer(self.grid.media_model.items, index.row(), self)
+            self.active_viewer = viewer
             viewer.exec()
             viewer.deleteLater()
         finally:
+            self.active_viewer = None
             self.viewer_open = False
+            self.thumbnails.set_paused(self.route == ("privacy",))
 
     def closeEvent(self, event):
         self.preview_timer.stop()

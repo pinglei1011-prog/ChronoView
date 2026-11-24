@@ -1,6 +1,8 @@
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
+os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",")
 
 import pytest
 from PySide6.QtCore import QStandardPaths

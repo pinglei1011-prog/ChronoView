@@ -1,10 +1,17 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
+$releaseVersion = & .venv\Scripts\python.exe -c 'from app import __version__; print(__version__)'
+if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version.' }
+$releasePath = Join-Path dist ('ChronoView-' + $releaseVersion)
+& .venv\Scripts\python.exe scripts\collect_licenses.py
+if ($LASTEXITCODE -ne 0) { throw 'License collection failed.' }
 & .venv\Scripts\python.exe -m PyInstaller --noconfirm packaging\ChronoView.spec
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
-Copy-Item -LiteralPath packaging\portable-readme.txt -Destination dist\ChronoView\使用说明.txt
+Copy-Item -LiteralPath packaging\portable-readme.txt -Destination (Join-Path $releasePath 'README.txt')
+Copy-Item -LiteralPath packaging\compatible-playback.cmd -Destination (Join-Path $releasePath '兼容播放.cmd')
 if (Test-Path -LiteralPath 'VALIDATION.md') {
-    Copy-Item -LiteralPath VALIDATION.md -Destination dist\ChronoView\VALIDATION.md
+    Copy-Item -LiteralPath VALIDATION.md -Destination (Join-Path $releasePath 'VALIDATION.md')
 }
-Write-Host 'Portable application: dist\ChronoView\ChronoView.exe'
+Copy-Item -LiteralPath assets\licenses -Destination (Join-Path $releasePath 'licenses') -Recurse -Force
+Write-Host ('Portable application: ' + (Join-Path $releasePath 'ChronoView.exe'))
