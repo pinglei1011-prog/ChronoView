@@ -1,0 +1,2 @@
+# Optional. Install before packaging if HEIC/HEIF support is needed.
+pillow-heif>=1,<2
