@@ -1,9 +1,10 @@
 from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QShortcut
-from PySide6.QtWidgets import QListView, QStyledItemDelegate, QStyle
+from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from app.core.albums import Album
 from app.ui.grid_layout import grid_layout_width
+from app.ui.theme import tokens
 
 
 class AlbumModel(QAbstractListModel):
@@ -39,38 +40,91 @@ class AlbumDelegate(QStyledItemDelegate):
         self.dark = False
 
     def sizeHint(self, option, index):
-        return QSize(self.edge + 20, 156)
+        return QSize(self.edge + 16, 134)
 
     def paint(self, painter: QPainter, option, index):
         album = index.data(Qt.ItemDataRole.UserRole)
         if album is None:
             return
+        t = tokens(self.dark)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(option.rect).adjusted(8, 8, -8, -8)
+
+        card = QRectF(option.rect).adjusted(7, 7, -7, -7)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        background = ("#243d59" if self.dark else "#e4efff") if selected else (
-            ("#232b37" if self.dark else "#eef4fd") if hovered else
-            ("#1c2028" if self.dark else "#ffffff"))
-        painter.setBrush(QColor(background))
-        painter.setPen(QPen(QColor("#4389f5" if selected else ("#2b3341" if self.dark else "#e5e9f0")), 1))
-        painter.drawRoundedRect(card, 16, 16)
-        painter.setPen(QColor("#edf0f6" if self.dark else "#202b3a"))
-        painter.setFont(QFont("Segoe UI", 18 if album.route[0] == "unknown" else 22, QFont.Weight.DemiBold))
-        title = QRectF(card.x() + 18, card.y() + 16, card.width() - 36, 42)
-        title_text = painter.fontMetrics().elidedText(album.title, Qt.TextElideMode.ElideRight, int(title.width()))
-        painter.drawText(title, Qt.AlignmentFlag.AlignVCenter, title_text)
-        painter.setPen(QColor("#9aa6b8" if self.dark else "#758195"))
-        painter.setFont(QFont("Segoe UI", 9))
-        subtitle = QRectF(title.x(), title.bottom() + 5, title.width(), 22)
-        text = painter.fontMetrics().elidedText(album.subtitle, Qt.TextElideMode.ElideRight, int(subtitle.width()))
-        painter.drawText(subtitle, Qt.AlignmentFlag.AlignVCenter, text)
-        detail = QRectF(title.x(), card.bottom() - 34, title.width(), 22)
-        painter.setPen(QColor("#7ca7e8" if self.dark else "#4f79ae"))
-        painter.drawText(detail, Qt.AlignmentFlag.AlignVCenter,
-                         f"{album.months} 个月" if album.route[0] == "year" else "查看照片与视频")
-        painter.drawText(detail, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, "›")
+
+        bg = t["selection"] if selected else (t["surface_hover"] if hovered else t["surface"])
+        border_color = t["accent"] if selected else (t["accent_border"] if hovered else t["border"])
+        painter.setBrush(QColor(bg))
+        painter.setPen(QPen(QColor(border_color), 1.5 if selected else 1.0))
+        painter.drawRoundedRect(card, 14, 14)
+
+        total = album.photos + album.videos
+        pad_x = 18.0
+        inner_w = card.width() - pad_x * 2
+
+        # Top-right total count pill
+        pill_text = f"{total:,} 项"
+        pill_font = QFont("Segoe UI", 8.5)
+        pill_font.setWeight(QFont.Weight.Medium)
+        painter.setFont(pill_font)
+        fm = painter.fontMetrics()
+        pill_w = fm.horizontalAdvance(pill_text) + 16
+        pill_rect = QRectF(card.right() - pad_x - pill_w, card.top() + 18, pill_w, 22)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(t["accent_soft"] if (hovered or selected) else t["badge_bg"]))
+        painter.drawRoundedRect(pill_rect, 11, 11)
+        painter.setPen(QColor(t["accent"] if (hovered or selected) else t["badge_text"]))
+        painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, pill_text)
+
+        # Month / Year title
+        title_font = QFont("Segoe UI", 16 if album.route[0] == "unknown" else 19, QFont.Weight.DemiBold)
+        painter.setFont(title_font)
+        painter.setPen(QColor(t["text"]))
+        title_rect = QRectF(card.left() + pad_x, card.top() + 14, max(40.0, inner_w - pill_w - 10), 32)
+        title_text = painter.fontMetrics().elidedText(album.title, Qt.TextElideMode.ElideRight, int(title_rect.width()))
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title_text)
+
+        # Photo / Video breakdown
+        sub_font = QFont("Segoe UI", 9)
+        painter.setFont(sub_font)
+        painter.setPen(QColor(t["text_secondary"]))
+        sub_rect = QRectF(card.left() + pad_x, title_rect.bottom() + 4, inner_w, 20)
+        sub_text = painter.fontMetrics().elidedText(album.subtitle, Qt.TextElideMode.ElideRight, int(sub_rect.width()))
+        painter.drawText(sub_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, sub_text)
+
+        # Visual proportion bar (photos in accent blue, videos in teal-indigo)
+        bar_rect = QRectF(card.left() + pad_x, sub_rect.bottom() + 10, inner_w, 4)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(t["surface_subtle"]))
+        painter.drawRoundedRect(bar_rect, 2, 2)
+        if total > 0:
+            photo_ratio = album.photos / total
+            video_ratio = album.videos / total
+            gap = 2.0 if (album.photos > 0 and album.videos > 0) else 0.0
+            avail = max(0.0, bar_rect.width() - gap)
+            if album.photos > 0:
+                pw = max(4.0, avail * photo_ratio)
+                painter.setBrush(QColor(t["accent"]))
+                painter.drawRoundedRect(QRectF(bar_rect.left(), bar_rect.top(), pw, bar_rect.height()), 2, 2)
+            if album.videos > 0:
+                vw = max(4.0, avail * video_ratio)
+                vx = bar_rect.right() - vw
+                painter.setBrush(QColor("#8b5cf6" if self.dark else "#7c3aed"))
+                painter.drawRoundedRect(QRectF(vx, bar_rect.top(), vw, bar_rect.height()), 2, 2)
+
+        # Subtle footer prompt + chevron
+        detail_font = QFont("Segoe UI", 8.5)
+        detail_font.setWeight(QFont.Weight.Medium if (hovered or selected) else QFont.Weight.Normal)
+        painter.setFont(detail_font)
+        painter.setPen(QColor(t["accent"] if (hovered or selected) else t["muted"]))
+        detail_rect = QRectF(card.left() + pad_x, card.bottom() - 28, inner_w, 20)
+        prompt = f"{album.months} 个月" if album.route[0] == "year" else "查看当月媒体"
+        painter.drawText(detail_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, prompt)
+        chevron_font = QFont("Segoe UI", 12)
+        painter.setFont(chevron_font)
+        painter.drawText(detail_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, "›")
         painter.restore()
 
 
@@ -118,8 +172,8 @@ class AlbumGrid(QListView):
 
     def _fit_columns(self):
         width = grid_layout_width(self)
-        columns = max(1, round(width / (self.requested_edge + 20)))
-        self.delegate.edge = max(100, width // columns - 20)
+        columns = max(1, round(width / (self.requested_edge + 16)))
+        self.delegate.edge = max(120, width // columns - 16)
         size = self.delegate.sizeHint(None, None)
         if self.gridSize() != size:
             self.setGridSize(size)

@@ -1,13 +1,14 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QTimer, QUrl, Qt, Signal, Slot, SIGNAL, qVersion
+from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QSize, QTimer, QUrl, Qt, SIGNAL, Signal, Slot, qVersion
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from app.services.video_thumbnail import format_duration
+from app.ui.theme import tinted_icon, tinted_pixmap
 
 
 class VideoSurface(QVideoWidget):
@@ -112,54 +113,94 @@ class VideoPlayer(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("videoPlayer")
         self.player = None
         self.generation = 0
         self.failed = False
         self.audio = QAudioOutput(self)
         self.audio.setVolume(.6)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
         self.status = QLabel()
+        self.status.setObjectName("videoStatus")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
+        self.status.hide()
         layout.addWidget(self.status)
+
         self.surface = VideoSurface()
-        self.surface.setStyleSheet("background: #10141b; border-radius: 12px;")
+        self.surface.setStyleSheet("background: #0b0d11;")
         self.surface.fullscreen_requested.connect(self.fullscreen_requested)
         self.surface.playback_toggle_requested.connect(self.toggle)
         layout.addWidget(self.surface, 1)
-        controls = QHBoxLayout()
+
+        control_bar = QFrame()
+        control_bar.setObjectName("videoControlBar")
+        control_bar.setFixedHeight(50)
+        controls = QHBoxLayout(control_bar)
+        controls.setContentsMargins(10, 0, 14, 0)
+        controls.setSpacing(12)
+
         self.play_button = QPushButton("播放")
+        self.play_button.setObjectName("videoPlayButton")
+        self.play_button.setIcon(tinted_icon("play.svg", "#ffffff", 13))
+        self.play_button.setIconSize(QSize(13, 13))
+        self.play_button.setFixedHeight(32)
+        self.play_button.setMinimumWidth(78)
+        self.play_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.play_button.clicked.connect(self.toggle)
         controls.addWidget(self.play_button)
+
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setObjectName("videoScrub")
         self.position_slider.setRange(0, 0)
+        self.position_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.position_slider.sliderReleased.connect(self.seek_from_slider)
         controls.addWidget(self.position_slider, 1)
+
         self.time_label = QLabel("0:00 / 0:00")
+        self.time_label.setObjectName("videoTime")
         controls.addWidget(self.time_label)
-        controls.addWidget(QLabel("音量"))
+
+        volume_icon = QLabel()
+        volume_icon.setPixmap(tinted_pixmap("volume.svg", "#98a2b3", 16))
+        volume_icon.setToolTip("音量")
+        controls.addWidget(volume_icon)
+
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setObjectName("videoVolume")
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(60)
-        self.volume_slider.setFixedWidth(90)
+        self.volume_slider.setFixedWidth(88)
+        self.volume_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.volume_slider.valueChanged.connect(lambda value: self.audio.setVolume(value / 100))
         controls.addWidget(self.volume_slider)
-        layout.addLayout(controls)
+
+        layout.addWidget(control_bar)
+
         self.timeout = QTimer(self)
         self.timeout.setSingleShot(True)
         self.timeout.timeout.connect(lambda: self.fail("打开视频超时，请检查硬盘连接后重试。"))
+
+    def _set_status(self, message: str):
+        self.status.setText(message)
+        self.status.setVisible(bool(message))
 
     def load(self, path: Path, autoplay=True):
         self.release()
         self.failed = False
         self.generation += 1
         generation = self.generation
-        self.status.setText("正在打开视频…")
+        self._set_status("正在打开视频…")
         self.position_slider.setRange(0, 0)
         self.position_slider.setEnabled(False)
         self.time_label.setText("0:00 / 0:00")
         self.play_button.setEnabled(False)
+        self.play_button.setText("播放")
+        self.play_button.setIcon(tinted_icon("play.svg", "#ffffff", 13))
         try:
             available = path.is_file()
         except OSError:
@@ -191,7 +232,7 @@ class VideoPlayer(QWidget):
             self.play_button.setEnabled(True)
         elif status == QMediaPlayer.MediaStatus.EndOfMedia:
             self.timeout.stop()
-            self.status.setText("播放结束 · 点击播放可重新播放")
+            self._set_status("播放结束 · 点击播放可重新播放")
 
     def duration_changed(self, duration):
         self.position_slider.setRange(0, duration)
@@ -201,7 +242,7 @@ class VideoPlayer(QWidget):
     def position_changed(self, position):
         if position > 0 and not self.failed:
             self.timeout.stop()
-            self.status.setText("")
+            self._set_status("")
             self.play_button.setEnabled(True)
         if not self.position_slider.isSliderDown():
             self.position_slider.setValue(position)
@@ -209,7 +250,9 @@ class VideoPlayer(QWidget):
         self.time_label.setText(f"{format_duration(position / 1000)} / {format_duration(duration / 1000)}")
 
     def state_changed(self, state):
-        self.play_button.setText("暂停" if state == QMediaPlayer.PlaybackState.PlayingState else "播放")
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self.play_button.setText("暂停" if playing else "播放")
+        self.play_button.setIcon(tinted_icon("pause.svg" if playing else "play.svg", "#ffffff", 13))
 
     def toggle(self):
         if not self.player:
@@ -230,7 +273,7 @@ class VideoPlayer(QWidget):
         self.timeout.stop()
         if self.player:
             QMetaObject.invokeMethod(self.player, "stop", Qt.ConnectionType.QueuedConnection)
-        self.status.setText(message)
+        self._set_status(message)
         self.play_button.setEnabled(False)
         self.position_slider.setEnabled(False)
 

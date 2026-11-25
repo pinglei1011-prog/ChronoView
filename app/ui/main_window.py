@@ -7,23 +7,23 @@ from threading import Event
 
 from PySide6.QtCore import QSettings, QSize, QStandardPaths, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-                               QListView, QSlider, QStackedWidget, QStyledItemDelegate, QToolButton, QTreeWidgetItem,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QListView, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+                               QSlider, QStackedWidget, QStyledItemDelegate, QToolButton, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
-from app.core.library import calendar_counts, filter_items, sort_items
+from app import __display_version__
 from app.core.albums import calendar_albums
+from app.core.library import calendar_counts, filter_items, sort_items
 from app.core.scanner import ScanResult, scan_library
 from app.services.thumbnail_service import ThumbnailService
-from app.ui.photo_grid import PhotoGrid
+from app.storage.index import LibraryIndex
 from app.ui.album_grid import AlbumGrid
 from app.ui.calendar_tree import CalendarTree
-from app.ui.privacy_page import InAppPrivacyPage
+from app.ui.photo_grid import PhotoGrid
 from app.ui.photo_viewer import PhotoViewer
-from app.ui.theme import asset_path, stylesheet
-from app.storage.index import LibraryIndex
-from app import __display_version__
+from app.ui.privacy_page import InAppPrivacyPage
+from app.ui.theme import apply_window_chrome, asset_path, stylesheet, tinted_icon, tinted_pixmap, tokens
 
 
 class ScanThread(QThread):
@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.dark = self.settings.value("dark", False, type=bool)
         self.sidebar_visible = self.settings.value("sidebar_visible", True, type=bool)
+        self.crop_thumbnails = self.settings.value("thumbnail_crop", False, type=bool)
         self.setWindowTitle("ChronoView · 我的照片")
         self.resize(1280, 850)
         self.setMinimumSize(880, 580)
@@ -125,98 +126,169 @@ class MainWindow(QMainWindow):
         outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # --- Sidebar ---
         self.sidebar = sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(238)
+        sidebar.setFixedWidth(244)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(20, 26, 16, 20)
+        side.setContentsMargins(16, 20, 14, 14)
+        side.setSpacing(8)
+
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(9)
+        brand_icon = QLabel()
+        brand_icon.setPixmap(QIcon(str(asset_path("chronoview.svg"))).pixmap(QSize(26, 26)))
+        brand_icon.setFixedSize(26, 26)
+        brand_row.addWidget(brand_icon)
         brand = QLabel("ChronoView")
         brand.setObjectName("brand")
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(6)
         brand_row.addWidget(brand, 1)
         self.hide_sidebar_button = self.sidebar_button("隐藏侧边栏", "sidebar-hide.svg")
         brand_row.addWidget(self.hide_sidebar_button)
         side.addLayout(brand_row)
+
         subtitle = QLabel("让每个瞬间，回到时间里")
-        subtitle.setObjectName("muted")
+        subtitle.setObjectName("brandTagline")
+        subtitle.setContentsMargins(2, 0, 0, 0)
         side.addWidget(subtitle)
-        side.addSpacing(28)
-        section = QLabel("我的照片")
-        section.setObjectName("section")
-        side.addWidget(section)
-        self.privacy_button = self.make_privacy_button()
+        side.addSpacing(14)
+
+        browse_section = QLabel("浏览")
+        browse_section.setObjectName("section")
+        side.addWidget(browse_section)
+
+        self.privacy_button = self.make_privacy_button("privacyNavigation")
         side.addWidget(self.privacy_button)
+
         self.navigation = CalendarTree()
         self.navigation.setHeaderHidden(True)
         self.navigation.setIndentation(14)
         self.navigation.itemSelectionChanged.connect(self.navigate)
         side.addWidget(self.navigation, 1)
-        section = QLabel("照片库")
-        section.setObjectName("section")
-        side.addWidget(section)
+
+        # Compact Library Card
+        library_card = QFrame()
+        library_card.setObjectName("libraryCard")
+        card_layout = QVBoxLayout(library_card)
+        card_layout.setContentsMargins(12, 11, 12, 11)
+        card_layout.setSpacing(8)
+
+        card_header = QHBoxLayout()
+        card_header.setSpacing(4)
+        lib_section = QLabel("照片库")
+        lib_section.setObjectName("section")
+        lib_section.setStyleSheet("padding-left: 0;")
+        card_header.addWidget(lib_section, 1)
+        self.refresh_button = QPushButton("刷新")
+        self.refresh_button.setObjectName("cardAction")
+        self.refresh_button.setIconSize(QSize(14, 14))
+        self.refresh_button.setToolTip("刷新照片库 · F5")
+        self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_button.clicked.connect(self.refresh)
+        card_header.addWidget(self.refresh_button)
+        card_layout.addLayout(card_header)
+
         self.path_label = QLabel("尚未选择照片库")
-        self.path_label.setObjectName("muted")
+        self.path_label.setObjectName("libraryPath")
         self.path_label.setTextFormat(Qt.TextFormat.PlainText)
         self.path_label.setWordWrap(True)
-        side.addWidget(self.path_label)
+        card_layout.addWidget(self.path_label)
+
         self.choose_button = QPushButton("选择文件夹")
         self.choose_button.setObjectName("primary")
+        self.choose_button.setIconSize(QSize(15, 15))
+        self.choose_button.setMinimumHeight(34)
+        self.choose_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.choose_button.setToolTip("选择照片库文件夹 · Ctrl+O")
         self.choose_button.clicked.connect(self.choose_folder)
-        side.addWidget(self.choose_button)
-        self.refresh_button = QPushButton("刷新照片库  ·  F5")
-        self.refresh_button.clicked.connect(self.refresh)
-        side.addWidget(self.refresh_button)
+        card_layout.addWidget(self.choose_button)
+
         self.remember_checkbox = QCheckBox("记住照片库位置")
         self.remember_checkbox.setChecked(self.remember_library)
+        self.remember_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.remember_checkbox.toggled.connect(self.set_remember_library)
-        side.addWidget(self.remember_checkbox)
-        footer = QLabel(f"本地浏览 · 原始文件只读\n{__display_version__}  照片与视频")
-        footer.setObjectName("muted")
-        side.addSpacing(12)
-        side.addWidget(footer)
-        about = QPushButton("关于与许可证")
-        about.clicked.connect(self.show_about)
-        side.addWidget(about)
+        card_layout.addWidget(self.remember_checkbox)
+
+        side.addWidget(library_card)
+
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(4, 2, 2, 0)
+        footer_row.setSpacing(4)
+        footer = QLabel(f"{__display_version__} · 本地只读")
+        footer.setObjectName("sidebarFooter")
+        footer_row.addWidget(footer, 1)
+        self.about_button = QPushButton("关于")
+        self.about_button.setObjectName("ghostButton")
+        self.about_button.setToolTip("关于与许可证")
+        self.about_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.about_button.clicked.connect(self.show_about)
+        footer_row.addWidget(self.about_button)
+        side.addLayout(footer_row)
+
         outer.addWidget(sidebar)
+
+        # --- Main Content ---
         content = QWidget()
         content.setObjectName("content")
         main = QVBoxLayout(content)
-        main.setContentsMargins(28, 25, 24, 12)
-        main.setSpacing(14)
+        main.setContentsMargins(28, 20, 24, 10)
+        main.setSpacing(12)
+
+        # Streamlined Header Row
         header = QHBoxLayout()
-        header.setSpacing(12)
+        header.setSpacing(10)
         self.show_sidebar_button = self.sidebar_button("显示侧边栏", "sidebar-show.svg")
-        header.addWidget(self.show_sidebar_button, 0, Qt.AlignmentFlag.AlignTop)
-        titles = QVBoxLayout()
-        self.heading = QLabel("全部照片")
-        self.heading.setObjectName("heading")
-        titles.addWidget(self.heading)
-        self.counts = QLabel("0 张照片 · 0 个视频")
-        self.counts.setObjectName("subtitle")
-        titles.addWidget(self.counts)
-        self.browse_hint = QLabel()
-        self.browse_hint.setObjectName("muted")
-        titles.addWidget(self.browse_hint)
-        header.addLayout(titles, 1)
-        self.privacy_action = self.make_privacy_button()
-        header.addWidget(self.privacy_action)
-        self.theme_button = QPushButton()
-        self.theme_button.clicked.connect(self.toggle_theme)
-        header.addWidget(self.theme_button)
-        main.addLayout(header)
-        tools = QHBoxLayout()
+        header.addWidget(self.show_sidebar_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.back_button = QPushButton("返回")
         self.back_button.setObjectName("backButton")
-        self.back_button.setIcon(QIcon(str(asset_path("back.svg"))))
-        self.back_button.setIconSize(QSize(20, 20))
-        self.back_button.setFixedHeight(36)
+        self.back_button.setIconSize(QSize(16, 16))
+        self.back_button.setFixedHeight(32)
         self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.back_button.clicked.connect(self.go_back)
-        tools.addWidget(self.back_button)
+        header.addWidget(self.back_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.heading = QLabel("全部照片")
+        self.heading.setObjectName("heading")
+        header.addWidget(self.heading, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.counts = QLabel("0 张照片 · 0 个视频")
+        self.counts.setObjectName("subtitle")
+        header.addWidget(self.counts, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Retained as hidden attribute for compatibility without adding header clutter.
+        self.browse_hint = QLabel()
+        self.browse_hint.setObjectName("muted")
+        self.browse_hint.hide()
+
+        header.addStretch(1)
+
+        self.privacy_action = self.make_privacy_button("headerPill")
+        self.privacy_action.setFixedHeight(32)
+        header.addWidget(self.privacy_action, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.theme_button = QPushButton()
+        self.theme_button.setObjectName("headerPill")
+        self.theme_button.setIconSize(QSize(15, 15))
+        self.theme_button.setFixedHeight(32)
+        self.theme_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_button.clicked.connect(self.toggle_theme)
+        header.addWidget(self.theme_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        main.addLayout(header)
+
+        # Compact Controls Bar (hidden on privacy page)
+        self.controls_bar = QWidget()
+        tools = QHBoxLayout(self.controls_bar)
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(10)
+
         self.sort_box = QComboBox()
         self.sort_box.addItems(["从新到旧", "从旧到新"])
         self.sort_box.setCurrentIndex(1)
+        self.sort_box.setFixedHeight(32)
+        self.sort_box.setCursor(Qt.CursorShape.PointingHandCursor)
         sort_view = QListView(self.sort_box)
         sort_view.setObjectName("sortPopup")
         sort_view.setUniformItemSizes(True)
@@ -228,27 +300,69 @@ class MainWindow(QMainWindow):
         self.sort_box.setMaxVisibleItems(2)
         self.sort_box.currentIndexChanged.connect(lambda: self.update_view())
         tools.addWidget(self.sort_box)
-        tools.addStretch()
-        self.size_label = QLabel("卡片大小")
+
+        # Fit / Cover Segmented Toggle
+        self.crop_control = QFrame()
+        self.crop_control.setObjectName("segmentedControl")
+        self.crop_control.setFixedHeight(32)
+        seg = QHBoxLayout(self.crop_control)
+        seg.setContentsMargins(3, 3, 3, 3)
+        seg.setSpacing(2)
+        self.fit_button = QPushButton("完整")
+        self.fit_button.setObjectName("segmentButton")
+        self.fit_button.setCheckable(True)
+        self.fit_button.setIconSize(QSize(14, 14))
+        self.fit_button.setToolTip("完整显示图片，不裁切边缘")
+        self.fit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cover_button = QPushButton("铺满")
+        self.cover_button.setObjectName("segmentButton")
+        self.cover_button.setCheckable(True)
+        self.cover_button.setIconSize(QSize(14, 14))
+        self.cover_button.setToolTip("居中铺满方格显示，点开大图仍看完整原图")
+        self.cover_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.crop_group = QButtonGroup(self)
+        self.crop_group.setExclusive(True)
+        self.crop_group.addButton(self.fit_button)
+        self.crop_group.addButton(self.cover_button)
+        self.fit_button.setChecked(not self.crop_thumbnails)
+        self.cover_button.setChecked(self.crop_thumbnails)
+        self.fit_button.clicked.connect(lambda: self.set_crop_mode(False))
+        self.cover_button.clicked.connect(lambda: self.set_crop_mode(True))
+        seg.addWidget(self.fit_button)
+        seg.addWidget(self.cover_button)
+        tools.addWidget(self.crop_control)
+
+        tools.addStretch(1)
+
+        self.size_label = QLabel("缩略图")
         self.size_label.setObjectName("muted")
         tools.addWidget(self.size_label)
+
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(110, 280)
         self.size_slider.setValue(self.settings.value("thumbnail_size", 180, type=int))
-        self.size_slider.setFixedWidth(125)
+        self.size_slider.setFixedWidth(132)
+        self.size_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         tools.addWidget(self.size_slider)
-        main.addLayout(tools)
+
+        main.addWidget(self.controls_bar)
+
         self.banner = QLabel()
+        self.banner.setObjectName("banner")
         self.banner.setTextFormat(Qt.TextFormat.PlainText)
         self.banner.setWordWrap(True)
         self.banner.hide()
         main.addWidget(self.banner)
+
+        # --- Pages ---
         self.pages = QStackedWidget()
         self.albums = AlbumGrid(self)
         self.albums.opened.connect(self.select_route)
         self.albums.set_thumbnail_size(self.size_slider.value())
+
         self.grid = PhotoGrid(self.thumbnails)
         self.grid.set_thumbnail_size(self.size_slider.value())
+        self.grid.set_crop_mode(self.crop_thumbnails)
         self.size_slider.valueChanged.connect(self.set_card_size)
         self.grid.doubleClicked.connect(lambda index: self.open_item(index)
                                        if index.data(Qt.ItemDataRole.UserRole).kind == "image" else None)
@@ -258,13 +372,24 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(key), self.grid,
                                  activated=lambda: self.open_item(self.grid.currentIndex()))
             shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+
+        # Elevated Empty State Card
         self.empty = QWidget()
-        empty_layout = QVBoxLayout(self.empty)
-        empty_layout.addStretch()
-        symbol = QLabel("▧")
-        symbol.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        symbol.setStyleSheet("font-size: 68px; color: #4389f5;")
-        empty_layout.addWidget(symbol)
+        empty_outer = QVBoxLayout(self.empty)
+        empty_outer.setContentsMargins(24, 24, 24, 24)
+        empty_outer.addStretch()
+        empty_card = QFrame()
+        empty_card.setObjectName("emptyCard")
+        empty_card.setFixedWidth(392)
+        empty_layout = QVBoxLayout(empty_card)
+        empty_layout.setContentsMargins(36, 38, 36, 34)
+        empty_layout.setSpacing(12)
+        self.empty_icon = QLabel()
+        self.empty_icon.setObjectName("emblemBadge")
+        self.empty_icon.setFixedSize(68, 68)
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self.empty_icon, alignment=Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addSpacing(4)
         self.empty_title = QLabel("把回忆带到这里")
         self.empty_title.setObjectName("emptyTitle")
         self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -274,14 +399,18 @@ class MainWindow(QMainWindow):
         self.empty_hint.setWordWrap(True)
         self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(self.empty_hint)
-        empty_layout.addSpacing(15)
+        empty_layout.addSpacing(8)
         empty_choose = QPushButton("选择照片库")
         empty_choose.setObjectName("primary")
-        empty_choose.setFixedWidth(150)
+        empty_choose.setFixedWidth(168)
+        empty_choose.setMinimumHeight(40)
+        empty_choose.setCursor(Qt.CursorShape.PointingHandCursor)
         empty_choose.clicked.connect(self.choose_folder)
         self.empty_choose = empty_choose
         empty_layout.addWidget(empty_choose, alignment=Qt.AlignmentFlag.AlignHCenter)
-        empty_layout.addStretch()
+        empty_outer.addWidget(empty_card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        empty_outer.addStretch()
+
         self.pages.addWidget(self.albums)
         self.pages.addWidget(self.grid)
         self.pages.addWidget(self.empty)
@@ -292,12 +421,14 @@ class MainWindow(QMainWindow):
         outer.addWidget(content, 1)
         self.browser = central
         self.setCentralWidget(self.browser)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
         self.progress.setFixedWidth(110)
         self.progress.hide()
         self.cancel_button = QPushButton("取消扫描")
+        self.cancel_button.setObjectName("cardAction")
         self.cancel_button.clicked.connect(self.cancel_scan)
         self.cancel_button.hide()
         self.statusBar().addPermanentWidget(self.progress)
@@ -305,28 +436,41 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("选择文件夹开始浏览 · 支持中文路径与移动硬盘")
         self.set_sidebar_visible(self.sidebar_visible, persist=False)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_window_chrome(self, self.dark)
+
     def sidebar_button(self, label, icon):
         button = QToolButton()
         button.setObjectName("sidebarToggle")
-        button.setFixedSize(32, 32)
-        button.setIconSize(QSize(22, 22))
+        button.setFixedSize(30, 30)
+        button.setIconSize(QSize(19, 19))
         button.setIcon(QIcon(str(asset_path(icon))))
         button.setToolTip(f"{label} · Ctrl+B")
         button.setAccessibleName(label)
+        button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(self.toggle_sidebar)
         return button
 
-    def make_privacy_button(self):
+    def make_privacy_button(self, object_name="privacyNavigation"):
         button = QPushButton("隐私页")
-        button.setObjectName("privacyNavigation")
+        button.setObjectName(object_name)
         button.setIcon(QIcon(str(asset_path("privacy.svg"))))
-        button.setIconSize(QSize(20, 20))
+        button.setIconSize(QSize(16, 16))
         button.setCheckable(True)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setToolTip("隐藏照片和视频 · Ctrl+L")
         button.clicked.connect(self.show_privacy)
         return button
+
+    def set_crop_mode(self, crop: bool):
+        self.crop_thumbnails = crop
+        self.fit_button.setChecked(not crop)
+        self.cover_button.setChecked(crop)
+        self.settings.setValue("thumbnail_crop", crop)
+        self.grid.set_crop_mode(crop)
+        self._update_themed_icons()
 
     def show_privacy(self):
         if self.route != ("privacy",):
@@ -366,13 +510,37 @@ class MainWindow(QMainWindow):
         if persist:
             self.settings.setValue("sidebar_visible", visible)
 
+    def _update_themed_icons(self):
+        t = tokens(self.dark)
+        hidden = self.route == ("privacy",)
+        privacy_color = t["accent"] if hidden else t["text_secondary"]
+        privacy_ic = tinted_icon("privacy.svg", privacy_color, 16)
+        self.privacy_button.setIcon(privacy_ic)
+        self.privacy_action.setIcon(privacy_ic)
+        self.hide_sidebar_button.setIcon(tinted_icon("sidebar-hide.svg", t["muted"], 19))
+        self.show_sidebar_button.setIcon(tinted_icon("sidebar-show.svg", t["text_secondary"], 19))
+        self.back_button.setIcon(tinted_icon("back.svg", t["text_secondary"], 16))
+        self.choose_button.setIcon(tinted_icon("folder.svg", "#ffffff", 15))
+        self.refresh_button.setIcon(tinted_icon("refresh.svg", t["text_secondary"], 14))
+        theme_icon = "sun.svg" if self.dark else "moon.svg"
+        self.theme_button.setIcon(tinted_icon(theme_icon, t["text_secondary"], 15))
+        self.fit_button.setIcon(tinted_icon("fit-contain.svg", t["text"] if not self.crop_thumbnails else t["muted"], 14))
+        self.cover_button.setIcon(tinted_icon("fit-cover.svg", t["text"] if self.crop_thumbnails else t["muted"], 14))
+        self.empty_icon.setPixmap(tinted_pixmap("photo-gallery.svg", t["accent"], 30))
+
     def apply_theme(self):
         self.setStyleSheet(stylesheet(self.dark))
+        apply_window_chrome(self, self.dark)
         self.grid.delegate.dark = self.dark
         self.albums.delegate.dark = self.dark
-        self.theme_button.setText("浅色外观" if self.dark else "深色外观")
+        self.navigation.delegate.dark = self.dark
+        self.safe_page.apply_theme(self.dark)
+        self.theme_button.setText("浅色" if self.dark else "深色")
+        self.theme_button.setToolTip("切换到浅色外观" if self.dark else "切换到深色外观")
+        self._update_themed_icons()
         self.grid.viewport().update()
         self.albums.viewport().update()
+        self.navigation.viewport().update()
 
     def set_card_size(self, edge):
         self.grid.set_thumbnail_size(edge)
@@ -477,7 +645,8 @@ class MainWindow(QMainWindow):
         hidden = route == ("privacy",)
         for button in (self.privacy_button, self.privacy_action):
             button.setChecked(hidden)
-        for widget in (self.counts, self.size_label, self.size_slider, self.refresh_button):
+        self._update_themed_icons()
+        for widget in (self.counts, self.size_label, self.size_slider, self.refresh_button, self.controls_bar):
             widget.setVisible(not hidden)
         self.statusBar().setVisible(not hidden)
         if hidden:
@@ -487,6 +656,7 @@ class MainWindow(QMainWindow):
             self.browse_hint.setText("照片和视频已隐藏，继续浏览后恢复显示")
             self.back_button.hide()
             self.sort_box.hide()
+            self.crop_control.hide()
             self.banner.hide()
             self.path_label.setText("照片库信息已隐藏")
             self.path_label.setToolTip("")
@@ -531,6 +701,7 @@ class MainWindow(QMainWindow):
         self.back_button.setAccessibleName(self.back_button.text())
         media_page = route[0] != "year"
         self.sort_box.setVisible(media_page)
+        self.crop_control.setVisible(media_page)
         self.size_label.setText("缩略图" if media_page else "卡片大小")
         self.browse_hint.setText("全部照片和视频 · 可在左侧按年份、月份浏览" if route[0] == "all" else
                                  ("选择月份，查看照片和视频" if route[0] == "year" else
@@ -729,5 +900,6 @@ class MainWindow(QMainWindow):
             self.scan.wait()
         self.thumbnails.shutdown()
         self.settings.setValue("thumbnail_size", self.size_slider.value())
+        self.settings.setValue("thumbnail_crop", self.crop_thumbnails)
         self.settings.sync()
         super().closeEvent(event)

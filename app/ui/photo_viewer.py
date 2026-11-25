@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot, Qt, QSize, QEvent
-from PySide6.QtGui import QIcon, QImage, QPixmap, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QDialog, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QLabel, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QObject, QRunnable, QSize, QThreadPool, Qt, Signal, Slot
+from PySide6.QtGui import QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
+                               QLabel, QPushButton, QStackedWidget, QToolButton, QVBoxLayout)
 
 from app.core.library import MediaItem
-from app.services.images import read_image, image_error_message
+from app.services.images import image_error_message, read_image
+from app.ui.theme import apply_window_chrome, asset_path, tinted_icon, tinted_pixmap, viewer_stylesheet
 from app.ui.video_player import VideoPlayer
-from app.ui.theme import asset_path
 
 
 class ImageSignals(QObject):
@@ -33,7 +33,8 @@ class ZoomView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setStyleSheet("border: none; background: #10141b;")
+        self.setStyleSheet("border: none; background: #0b0d11;")
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.fit_mode = True
@@ -71,23 +72,38 @@ class PhotoViewer(QDialog):
         self.jobs = {}
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
+        self.setObjectName("photoViewer")
+        self.setStyleSheet(viewer_stylesheet())
         self.setWindowTitle("ChronoView · 查看")
-        self.resize(1080, 760)
+        self.resize(1120, 780)
         self.setMinimumSize(640, 420)
+
         layout = QVBoxLayout(self)
-        bar = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # --- Top Cinema Bar ---
+        top_bar = QFrame()
+        top_bar.setObjectName("viewerTopBar")
+        top_bar.setFixedHeight(52)
+        bar = QHBoxLayout(top_bar)
+        bar.setContentsMargins(18, 0, 16, 0)
+        bar.setSpacing(10)
+
         self.title = QLabel()
+        self.title.setObjectName("viewerTitle")
         self.title.setTextFormat(Qt.TextFormat.PlainText)
-        self.title.setWordWrap(True)
+        self.title.setWordWrap(False)
         bar.addWidget(self.title, 1)
+
         self.previous = QPushButton("上一项")
         self.following = QPushButton("下一项")
         for button, icon, hint in [(self.previous, "back.svg", "上一项 · 左方向键"),
                                    (self.following, "forward.svg", "下一项 · 右方向键")]:
             button.setObjectName("viewerNavigation")
-            button.setIcon(QIcon(str(asset_path(icon))))
-            button.setIconSize(QSize(20, 20))
-            button.setFixedHeight(36)
+            button.setIcon(tinted_icon(icon, "#cbd5e1", 16))
+            button.setIconSize(QSize(16, 16))
+            button.setFixedHeight(32)
             button.setToolTip(hint)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.following.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -95,12 +111,15 @@ class PhotoViewer(QDialog):
         self.following.clicked.connect(self.next_item, Qt.ConnectionType.QueuedConnection)
         bar.addWidget(self.previous)
         bar.addWidget(self.following)
-        layout.addLayout(bar)
+        layout.addWidget(top_bar)
+
+        # --- Stage ---
         self.pages = QStackedWidget()
         self.view = ZoomView()
         self.video = VideoPlayer()
         self.video.fullscreen_requested.connect(self.toggle_fullscreen)
         self.message = QLabel()
+        self.message.setObjectName("viewerMessage")
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.message.setWordWrap(True)
@@ -113,20 +132,46 @@ class PhotoViewer(QDialog):
         self.view.viewport().installEventFilter(self)
         self.position_photo_arrows()
         layout.addWidget(self.pages, 1)
-        tools = QHBoxLayout()
+
+        # --- Bottom Cinema Bar ---
+        bottom_bar = QFrame()
+        bottom_bar.setObjectName("viewerBottomBar")
+        bottom_bar.setFixedHeight(54)
+        tools = QHBoxLayout(bottom_bar)
+        tools.setContentsMargins(18, 0, 16, 0)
+        tools.setSpacing(8)
+
         self.info = QLabel()
+        self.info.setObjectName("viewerInfo")
         tools.addWidget(self.info, 1)
+
         self.photo_tools = []
-        for text, callback in [("−", lambda: self.view.zoom(1 / 1.25)),
-                               ("+", lambda: self.view.zoom(1.25)),
-                               ("适应窗口", self.view.fit), ("原始尺寸", self.view.actual),
-                               ("全屏 · F11", self.toggle_fullscreen), ("关闭", self.close)]:
+        tool_specs = [
+            ("", "zoom-out.svg", "缩小", lambda: self.view.zoom(1 / 1.25), True, "viewerTool"),
+            ("", "zoom-in.svg", "放大", lambda: self.view.zoom(1.25), True, "viewerTool"),
+            ("适应窗口", None, "缩放以适应窗口", self.view.fit, True, "viewerTool"),
+            ("原始尺寸", None, "按 100% 原始像素显示", self.view.actual, True, "viewerTool"),
+            ("全屏", "fullscreen.svg", "切换全屏 · F11", self.toggle_fullscreen, False, "viewerTool"),
+            ("关闭", "close.svg", "关闭查看器 · Esc", self.close, False, "viewerClose"),
+        ]
+        for text, icon_name, tip, callback, is_photo_tool, obj_name in tool_specs:
             button = QPushButton(text)
+            button.setObjectName(obj_name)
+            button.setFixedHeight(32)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            if icon_name:
+                button.setIcon(tinted_icon(icon_name, "#cbd5e1", 15))
+                button.setIconSize(QSize(15, 15))
+            if not text:
+                button.setFixedWidth(36)
+                button.setAccessibleName(tip)
             button.clicked.connect(callback)
             tools.addWidget(button)
-            if text in ("−", "+", "适应窗口", "原始尺寸"):
+            if is_photo_tool:
                 self.photo_tools.append(button)
-        layout.addLayout(tools)
+        layout.addWidget(bottom_bar)
+
         for key, callback in [("Left", lambda: self.navigate(-1)),
                               ("Right", lambda: self.navigate(1)),
                               ("F11", self.toggle_fullscreen),
@@ -137,22 +182,43 @@ class PhotoViewer(QDialog):
             QShortcut(QKeySequence("Ctrl+L"), self, activated=parent.show_privacy)
         self.load()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_window_chrome(self, True)
+
     def navigation_button(self, icon, name, direction):
         button = QToolButton(self.view.viewport())
         button.setObjectName("viewerArrow")
-        button.setIcon(QIcon(str(asset_path(icon))))
-        button.setIconSize(QSize(28, 28))
-        button.setFixedSize(44, 64)
+        arrow_icon = QIcon()
+        arrow_icon.addPixmap(tinted_pixmap(icon, "#ffffff", 24), QIcon.Mode.Normal)
+        arrow_icon.addPixmap(tinted_pixmap(icon, "#2b3242", 24), QIcon.Mode.Disabled)
+        button.setIcon(arrow_icon)
+        button.setIconSize(QSize(24, 24))
+        button.setFixedSize(44, 58)
         button.setAccessibleName(name)
         button.setToolTip(f"{name} · {'←' if direction < 0 else '→'}")
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setStyleSheet("""
-            QToolButton#viewerArrow { background: rgba(255,255,255,24); border: 1px solid rgba(255,255,255,24); border-radius: 18px; }
-            QToolButton#viewerArrow:hover { background: #327cf1; border-color: #6ea5fa; }
-            QToolButton#viewerArrow:pressed { background: #2168d5; }
-            QToolButton#viewerArrow:focus { border: 2px solid #83b2ff; }
-            QToolButton#viewerArrow:disabled { background: transparent; border-color: transparent; }
+            QToolButton#viewerArrow {
+                background: rgba(18, 22, 31, 170);
+                border: 1px solid rgba(255, 255, 255, 28);
+                border-radius: 22px;
+            }
+            QToolButton#viewerArrow:hover {
+                background: rgba(37, 99, 235, 225);
+                border-color: rgba(147, 197, 253, 180);
+            }
+            QToolButton#viewerArrow:pressed {
+                background: #1d4ed8;
+            }
+            QToolButton#viewerArrow:focus {
+                border: 2px solid #60a5fa;
+            }
+            QToolButton#viewerArrow:disabled {
+                background: transparent;
+                border-color: transparent;
+            }
         """)
         button.clicked.connect(self.previous_item if direction < 0 else self.next_item,
                                Qt.ConnectionType.QueuedConnection)
@@ -161,8 +227,8 @@ class PhotoViewer(QDialog):
     def position_photo_arrows(self):
         viewport = self.view.viewport()
         y = max(0, (viewport.height() - self.photo_previous.height()) // 2)
-        self.photo_previous.move(12, y)
-        self.photo_following.move(max(12, viewport.width() - self.photo_following.width() - 12), y)
+        self.photo_previous.move(16, y)
+        self.photo_following.move(max(16, viewport.width() - self.photo_following.width() - 16), y)
         self.photo_previous.raise_()
         self.photo_following.raise_()
 
