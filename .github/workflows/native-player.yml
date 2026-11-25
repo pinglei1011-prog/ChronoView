@@ -1,0 +1,44 @@
+name: Build pinned native player
+on:
+  push:
+    branches: [build/libmpv-0.42]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/btbn/ffmpeg-builds/win64-lgpl@sha256:f0fd165f48e52858310ef59e06430ec8a7d88da7adf5a5860d23865a20650772
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record fixed toolchain metadata
+        run: |
+          mkdir -p native-output/metadata
+          cp /cross.meson native-output/metadata/
+          $CC --version > native-output/metadata/compiler.txt
+          pkg-config --list-all > native-output/metadata/packages.txt
+          for f in /opt/ffbuild/lib/pkgconfig/*.pc; do cat "$f"; done > native-output/metadata/pkgconfig.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-toolchain-metadata
+          path: native-output/metadata
+      - name: Build fixed-source LGPL player and relinking kit
+        run: bash scripts/native/build.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-build-logs
+          path: |
+            native-output/metadata
+            native-work/**/meson-logs/meson-log.txt
+            native-work/**/ffbuild/config.log
+            native-work/native-link.map
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chronoview-native-player
+          path: native-output
+          compression-level: 6
