@@ -1,4 +1,4 @@
-ChronoView 1.1.0 — libmpv and linked dependencies
+ChronoView 1.0.0 — libmpv and linked dependencies
 
 Default video playback: mpv 0.42.0, API 2, Windows x86_64, LGPL build.
 Upstream: https://github.com/mpv-player/mpv
@@ -17,8 +17,8 @@ Component notices are in the native subfolder.
 
 The corresponding LGPL sources, build instructions, source hashes and exact
 static dependency relinking inputs are supplied in the paired asset:
-  ChronoView-1.1.0-third-party-sources.zip
-  https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.1.0
+  ChronoView-1.0.0-third-party-sources.zip
+  https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.0
 
 Libmpv is an independent DLL. Replace
   _internal/vendor/libmpv/libmpv-2.dll

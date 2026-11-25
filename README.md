@@ -1,8 +1,8 @@
-# ChronoView V1.1.0
+# ChronoView V1.0
 
 Windows 本地照片与视频浏览器，Python + PySide6 编写。照片管理保留现有界面，视频播放改用 libmpv 0.42.0 原生窗口和 D3D11 硬件解码。无需安装 Python、系统播放器或 HEVC 扩展；媒体原文件只读。
 
-[下载正式版：安装包、绿色版及配套源码](https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.1.0)。安装版适合日常使用，绿色版解压整个文件夹后运行 ChronoView.exe。不要只复制 EXE，须保留 _internal 和 licenses。
+[下载正式版：安装包、绿色版及配套源码](https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.0)。安装版适合日常使用，绿色版解压整个文件夹后运行 ChronoView.exe。不要只复制 EXE，须保留 _internal 和 licenses。
 
 ## 使用
 

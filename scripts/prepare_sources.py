@@ -74,7 +74,7 @@ See metadata/linked-archives.json and native-link.map for the exact static link 
 relink/lib contains those archives; relink/include and relink/pkgconfig retain headers
 and dependency metadata. Runtime copyright notices are in the top-level notices folder.
 
-The native CI workflow and build scripts are also in the ChronoView V1.1.0 source tag.
+The native CI workflow and build scripts are also in the ChronoView V1.0 source tag.
 The fixed cross-toolchain container is identified by immutable digest in the lock.
 On a Linux Docker host, mount the project at /src and use that container:
   docker run --rm -v "$PWD:/src" -w /src <container-from-lock> bash scripts/native/build.sh

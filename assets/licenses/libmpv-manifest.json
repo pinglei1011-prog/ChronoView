@@ -3,7 +3,7 @@
   "platform": "Windows x86_64",
   "distribution_status": "release",
   "dll_sha256": "1004c9b6bf71516dcd0708d2f425ef0813022991920b3b5e2926ff13db7df20f",
-  "runtime_archive": "https://github.com/pinglei1011-prog/ChronoView/releases/download/V1.1.0/ChronoView-1.1.0-portable-win64.zip",
+  "runtime_archive": "https://github.com/pinglei1011-prog/ChronoView/releases/download/V1.0/ChronoView-1.0.0-portable-win64.zip",
   "build_run": "https://github.com/pinglei1011-prog/ChronoView/actions/runs/45541085396",
   "build_commit": "83f38b4226c6725feafd27520b1404721c7abd16",
   "container": "ghcr.io/btbn/ffmpeg-builds/win64-lgpl@sha256:f0fd165f48e52858310ef59e06430ec8a7d88da7adf5a5860d23865a20650772",
@@ -50,6 +50,6 @@
     "mpv-configuration": "-Dbuildtype=release -Dprefix=/opt/ffbuild -Ddefault_library=shared -Dprefer_static=true -Dauto_features=disabled -Dgpl=false -Dcplayer=false -Dlibmpv=true -Dbuild-date=false -Dlua=disabled -Djavascript=disabled -Dgl=disabled -Dvulkan=disabled -Dd3d11=enabled -Dwasapi=enabled -Dwin32-threads=enabled -Dshaderc=enabled -Dspirv-cross=enabled '-Dc_link_args=-static-libgcc -static-libstdc++ -L/opt/ffbuild/lib -Wl,-Map,/__w/ChronoView/ChronoView/native-work/native-link.map' '-Dcpp_link_args=-static-libgcc -static-libstdc++ -L/opt/ffbuild/lib -Wl,-Map,/__w/ChronoView/ChronoView/native-work/native-link.map' --cross-file=/cross.meson",
     "libplacebo-version": "v7.387.0"
   },
-  "static_link_inputs": "ChronoView-1.1.0-third-party-sources.zip: native/relink and metadata/linked-archives.json",
-  "source_companion": "https://github.com/pinglei1011-prog/ChronoView/releases/download/V1.1.0/ChronoView-1.1.0-third-party-sources.zip"
+  "static_link_inputs": "ChronoView-1.0.0-third-party-sources.zip: native/relink and metadata/linked-archives.json",
+  "source_companion": "https://github.com/pinglei1011-prog/ChronoView/releases/download/V1.0/ChronoView-1.0.0-third-party-sources.zip"
 }

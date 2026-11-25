@@ -1,7 +1,7 @@
-ChronoView V1.1.0 正式版 — 2026/11/25
+ChronoView V1.0 正式版 — 2026/11/25
 
 绿色版：完整解压后双击 ChronoView.exe，保留 _internal 和 licenses。
-安装版：运行 ChronoView-1.1.0-setup-win64.exe，按当前用户安装，无需管理员权限。
+安装版：运行 ChronoView-1.0.0-setup-win64.exe，按当前用户安装，无需管理员权限。
 不需要另装 Python、FFmpeg、mpv、系统播放器或 HEVC 扩展。
 
 启动进入主界面隐私页，主动打开照片库后显示媒体；Ctrl+L 可隐藏媒体并停止视频。
@@ -18,6 +18,6 @@ HEIC/HEIF 解码器未包含；新增文件按 F5，缓存暂不自动清理。
 卸载安装版会保留用户设置、索引、缓存及照片库。
 
 测试和已知边界见 VALIDATION.md，第三方归属、许可及 DLL 替换说明见 licenses。
-配套源码/重链接包：ChronoView-1.1.0-third-party-sources.zip。
-SHA-256：ChronoView-1.1.0-SHA256SUMS.txt。
-下载与问题反馈：https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.1.0
+配套源码/重链接包：ChronoView-1.0.0-third-party-sources.zip。
+SHA-256：ChronoView-1.0.0-SHA256SUMS.txt。
+下载与问题反馈：https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.0

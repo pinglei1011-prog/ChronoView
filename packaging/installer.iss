@@ -1,10 +1,10 @@
-﻿#define AppVersion "1.1.0"
+﻿#define AppVersion "1.0.0"
 #define ProjectRoot AddBackslash(SourcePath) + ".."
 [Setup]
 AppId={{8A2E56B4-A023-4A20-A995-55C7707CF23D}
 AppName=ChronoView
 AppVersion={#AppVersion}
-AppVerName=ChronoView {#AppVersion}
+AppVerName=ChronoView V1.0 正式版
 AppPublisher=ChronoView
 AppPublisherURL=https://github.com/pinglei1011-prog/ChronoView
 AppSupportURL=https://github.com/pinglei1011-prog/ChronoView/issues

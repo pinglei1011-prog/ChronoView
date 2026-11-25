@@ -42,6 +42,8 @@ args = [installer, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUS
         f"/DIR={app}", "/TASKS="]
 run(args + [f"/LOG={work / 'install.log'}"])
 assert Path(installed()).resolve() == app.resolve()
+with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+    assert winreg.QueryValueEx(key, "DisplayVersion")[0] == __version__
 assert (app / "ChronoView.exe").is_file()
 assert (app / "_internal/vendor/libmpv/libmpv-2.dll").is_file()
 shortcut = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/ChronoView/ChronoView.lnk"
@@ -66,6 +68,7 @@ assert marker.is_file() and external.read_bytes() == expected
 assert installed() is None
 assert not shortcut.exists()
 report = dict(success=True, version=__version__, current_user_install=True,
+              installed_display_version_verified=True,
               installer_sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
               start_menu_shortcut_created_and_removed=True,
               reinstall_preserves_unlisted_file=True, installed_playback=media["success"],
