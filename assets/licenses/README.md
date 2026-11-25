@@ -24,3 +24,5 @@ Qt 其他组件归属：https://doc.qt.io/qt-6.10/licenses-used-in-qt.html
 FFmpeg 许可说明：https://ffmpeg.org/legal.html
 
 编码标准的专利权与开源代码许可不同。商业发行前需另行核对目标地区和使用方式的要求；当前开发验证不构成商业发行的完整法律审查。
+
+默认视频播放另外使用 libmpv 的固定源码 LGPL 构建，详情见 README-libmpv.txt 和 libmpv-manifest.json。native 子目录保留静态依赖许可：FreeType 使用 FTL、HarfBuzz 使用其 MIT 风格许可，shaderc/SPIR-V 组件保留 Apache/BSD 等上游许可。GCC 运行库附带 Runtime Library Exception，MinGW/winpthreads 保留其许可；许可文件的存在不表示整个应用采用 GPL。精确链接归档及源码锁位于同版本配套源码/重链接包。

@@ -118,6 +118,11 @@ class PhotoViewer(QDialog):
         self.view = ZoomView()
         self.video = VideoPlayer()
         self.video.fullscreen_requested.connect(self.toggle_fullscreen)
+        if hasattr(self.video, "navigate_requested"):
+            self.video.navigate_requested.connect(self.navigate, Qt.ConnectionType.QueuedConnection)
+            self.video.escape_requested.connect(self.escape, Qt.ConnectionType.QueuedConnection)
+            if parent is not None and hasattr(parent, "show_privacy"):
+                self.video.privacy_requested.connect(parent.show_privacy, Qt.ConnectionType.QueuedConnection)
         self.message = QLabel()
         self.message.setObjectName("viewerMessage")
         self.message.setTextFormat(Qt.TextFormat.PlainText)
@@ -309,6 +314,8 @@ class PhotoViewer(QDialog):
     def closeEvent(self, event):
         self.token += 1
         self.video.release()
+        if hasattr(self.video, "shutdown"):
+            self.video.shutdown()
         self.pool.clear()
         self.pool.waitForDone()
         super().closeEvent(event)

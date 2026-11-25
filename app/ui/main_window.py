@@ -364,10 +364,9 @@ class MainWindow(QMainWindow):
         self.grid.set_thumbnail_size(self.size_slider.value())
         self.grid.set_crop_mode(self.crop_thumbnails)
         self.size_slider.valueChanged.connect(self.set_card_size)
-        self.grid.doubleClicked.connect(lambda index: self.open_item(index)
-                                       if index.data(Qt.ItemDataRole.UserRole).kind == "image" else None)
-        self.grid.clicked.connect(lambda index: self.open_item(index)
-                                 if index.data(Qt.ItemDataRole.UserRole).kind == "video" else None)
+        # Open both photos and videos on a double-click. Opening a video on
+        # the first click sends the next click into the new playback window.
+        self.grid.doubleClicked.connect(self.open_item)
         for key in ("Return", "Enter"):
             shortcut = QShortcut(QKeySequence(key), self.grid,
                                  activated=lambda: self.open_item(self.grid.currentIndex()))
@@ -547,7 +546,11 @@ class MainWindow(QMainWindow):
         self.albums.set_thumbnail_size(edge)
 
     def show_about(self):
+        import os
+        video_notice = ("视频播放：libmpv 0.42.0（固定源码 LGPL 构建）。\n"
+                        if os.environ.get("CHRONOVIEW_VIDEO_BACKEND") == "mpv" else "")
         QMessageBox.about(self, "关于 ChronoView", f"ChronoView {__display_version__} · 本地照片与视频\n\n"
+                          + video_notice +
                           "使用 Qt / PySide6 6.10.3（LGPLv3）和 FFmpeg 7.1.3（LGPLv2.1+）动态库。\n"
                           "This software uses libraries from the FFmpeg project under the LGPLv2.1 or later.\n\n"
                           "完整许可证、归属、构建配置和源码获取说明见绿色版 licenses 文件夹。\n"
@@ -703,9 +706,9 @@ class MainWindow(QMainWindow):
         self.sort_box.setVisible(media_page)
         self.crop_control.setVisible(media_page)
         self.size_label.setText("缩略图" if media_page else "卡片大小")
-        self.browse_hint.setText("全部照片和视频 · 可在左侧按年份、月份浏览" if route[0] == "all" else
+        self.browse_hint.setText("双击照片或视频查看 · 可在左侧按年份、月份浏览" if route[0] == "all" else
                                  ("选择月份，查看照片和视频" if route[0] == "year" else
-                                  "双击照片查看大图 · 单击视频播放"))
+                                  "双击照片查看大图 · 双击视频自动播放"))
         if media_page:
             self.albums.album_model.replace([])
             self.grid.media_model.replace(self.visible_items)

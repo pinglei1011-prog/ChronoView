@@ -1,20 +1,23 @@
-ChronoView V1.0 — 2026/11/25 更新
+ChronoView V1.1.0 正式版 — 2026/11/25
 
-双击 ChronoView.exe。请保留整个文件夹，包括 _internal 和 licenses；不需要另装 Python。
-启动直接进入主界面隐私页；主动打开照片库或选择文件夹后显示媒体。
-全部照片显示完整媒体列表，左侧可按年份、月份浏览，默认从旧到新排序。
-“完整”显示全部画面；“铺满”仅对缩略图居中裁切，打开大图仍显示完整原图。
-双击照片查看大图，单击视频播放；左右方向键连续切换，照片画布侧边也有切换箭头。
-视频画面单击播放/暂停，双击全屏；支持进度拖动、音量和全屏。照片可缩放和平移。
-F11 全屏，Esc 返回；F5 刷新照片库，Ctrl+O 选择目录，Ctrl+B 显示/隐藏侧栏。
-左侧/右上角隐私页或 Ctrl+L 隐藏媒体和目录信息；查看器中 Ctrl+L 会关闭查看器并停止视频。
-可关闭“记住照片库位置”。隐私页不是密码锁或加密，不清除已有缓存和索引。
+绿色版：完整解压后双击 ChronoView.exe，保留 _internal 和 licenses。
+安装版：运行 ChronoView-1.1.0-setup-win64.exe，按当前用户安装，无需管理员权限。
+不需要另装 Python、FFmpeg、mpv、系统播放器或 HEVC 扩展。
 
+启动进入主界面隐私页，主动打开照片库后显示媒体；Ctrl+L 可隐藏媒体并停止视频。
+全部照片显示所有照片和视频，默认从旧到新；侧栏按年份、月份浏览，单击展开收起。
+单击缩略图选中，双击/Enter 打开；视频准备好后自动播放。
+画面单击暂停/继续，双击/F11 全屏，Esc 返回；支持进度、音量、左右键切换。
+照片支持缩放和平移。Ctrl+B 隐藏侧栏，F5 刷新，Ctrl+O 选择目录。
+隐私页不是密码锁或加密，不清除已有索引和缩略图。
 原始照片和视频只读，不修改、移动、重命名或删除。
-本机验证 H.264 MP4、H.265 MOV、H.264 MKV。HEIC/HEIF 解码器未包含，缓存暂不自动清理。
-异常时可关闭所有 ChronoView 窗口，再双击“兼容播放.cmd”。
 
-第三方许可证、归属及替换说明见 licenses 文件夹。
-配套 ChronoView-1.0.0-third-party-sources.zip 提供匹配的 Qt/PySide6/FFmpeg 源码及构建信息。
-SHA-256 校验见 ChronoView-1.0.0-SHA256SUMS.txt。
-此版本仅为 Windows x64 绿色版，没有正式安装包。测试与已知边界见 VALIDATION.md。
+默认内核 libmpv 0.42.0，D3D11 硬件解码，fast 渲染配置。
+若设备存在兼容问题，关闭全部窗口后运行“兼容播放.cmd”切到 Qt 后端。
+HEIC/HEIF 解码器未包含；新增文件按 F5，缓存暂不自动清理。
+卸载安装版会保留用户设置、索引、缓存及照片库。
+
+测试和已知边界见 VALIDATION.md，第三方归属、许可及 DLL 替换说明见 licenses。
+配套源码/重链接包：ChronoView-1.1.0-third-party-sources.zip。
+SHA-256：ChronoView-1.1.0-SHA256SUMS.txt。
+下载与问题反馈：https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.1.0

@@ -16,8 +16,9 @@ else:
 a = Analysis(
     [str(root / 'main.py')],
     pathex=[str(root)],
-    binaries=heif_binaries,
-    datas=[(str(root / 'assets'), 'assets')] + heif_data,
+    binaries=heif_binaries + [(str(root / 'vendor/libmpv/libmpv-2.dll'), 'vendor/libmpv')],
+    datas=[(str(root / 'assets'), 'assets')] + heif_data +
+          [(str(root / 'vendor/libmpv/manifest.json'), 'vendor/libmpv')],
     hiddenimports=heif_imports,
     hookspath=[],
     excludes=['PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
@@ -40,5 +41,6 @@ a.binaries = [entry for entry in a.binaries if not (
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='ChronoView',
           debug=False, bootloader_ignore_signals=False, strip=False,
-          upx=False, console=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=f'ChronoView-{version}')
+          upx=False, console=False, icon=str(root / 'assets/chronoview.ico'))
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False,
+               name=f'ChronoView-{version}')

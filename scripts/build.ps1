@@ -4,6 +4,10 @@ Set-Location -LiteralPath $projectRoot
 $releaseVersion = & .venv\Scripts\python.exe -c 'from app import __version__; print(__version__)'
 if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version.' }
 $releasePath = Join-Path dist ('ChronoView-' + $releaseVersion)
+& .venv\Scripts\python.exe scripts\prepare_libmpv.py
+if ($LASTEXITCODE -ne 0) { throw 'Native playback runtime verification failed.' }
+& .venv\Scripts\python.exe scripts\make_icon.py
+if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed.' }
 & .venv\Scripts\python.exe scripts\collect_licenses.py
 if ($LASTEXITCODE -ne 0) { throw 'License collection failed.' }
 & .venv\Scripts\python.exe -m PyInstaller --noconfirm packaging\ChronoView.spec

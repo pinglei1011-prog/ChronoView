@@ -12,7 +12,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-os.environ.setdefault('QT_MEDIA_BACKEND', 'ffmpeg')
+from app.playback_config import configure_playback_environment
+configure_playback_environment()
 os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 os.environ.setdefault('QT_LOGGING_RULES', 'qt.multimedia.ffmpeg.*=true;qt.multimedia.*.debug=true')
 

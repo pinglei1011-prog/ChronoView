@@ -24,8 +24,6 @@ for name in ('shaderc', 'spirv_cross', 'freetype2', 'harfbuzz'):
     source = Path('/opt/ffbuild/include') / name
     if source.is_dir():
         shutil.copytree(source, include / name)
-for source in Path('/opt/ffbuild/include').glob('*.h'):
-    shutil.copyfile(source, include / source.name)
 pc = out / 'relink/pkgconfig'
 shutil.copytree('/opt/ffbuild/lib/pkgconfig', pc)
 (out / 'metadata/linked-archives.json').write_text(json.dumps(manifest, indent=2))

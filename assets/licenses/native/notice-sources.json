@@ -1,0 +1,147 @@
+[
+  {
+    "component": "freetype",
+    "repository": "freetype/freetype",
+    "notice_revision": "63e7ef2e615d16199b447719cfccdcbb8f6201d5",
+    "files": [
+      "LICENSE.TXT",
+      "docs/FTL.TXT",
+      "docs/GPLv2.TXT"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "harfbuzz",
+    "repository": "harfbuzz/harfbuzz",
+    "notice_revision": "4d2b4125b4d46a49335f143a7db0f9e741714910",
+    "files": [
+      "COPYING"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "shaderc",
+    "repository": "google/shaderc",
+    "notice_revision": "4f0683ab2419ecbb9e18c9edfd4ffd70c2ba8cc6",
+    "files": [
+      "LICENSE",
+      "AUTHORS"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "spirv-tools",
+    "repository": "KhronosGroup/SPIRV-Tools",
+    "notice_revision": "50d7a763ce05f462ac815e5ff7f05656c32ef48f",
+    "files": [
+      "LICENSE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "spirv-headers",
+    "repository": "KhronosGroup/SPIRV-Headers",
+    "notice_revision": "fef168c54ed2e37c314eb251806aaf9877f38465",
+    "files": [
+      "LICENSE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "spirv-cross",
+    "repository": "KhronosGroup/SPIRV-Cross",
+    "notice_revision": "57e4efcc84112abcd426dc5ec248b5339bee04f2",
+    "files": [
+      "LICENSE",
+      "LICENSES/Apache-2.0.txt"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "glslang",
+    "repository": "KhronosGroup/glslang",
+    "notice_revision": "e7917c4ff6c660aba47b2df0c84f123d5bb1c3ce",
+    "files": [
+      "LICENSE.txt"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "gcc-runtime",
+    "repository": "gcc-mirror/gcc",
+    "notice_revision": "f1114bb0f3ec67f2fb6bee88f22e148c3d7dedf4",
+    "files": [
+      "COPYING3",
+      "COPYING.RUNTIME",
+      "COPYING.LIB"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "mingw-w64",
+    "repository": "mingw-w64/mingw-w64",
+    "notice_revision": "70d3f1ac8cffdb8ac48f4190da67aa295dddc8fd",
+    "files": [
+      "COPYING",
+      "mingw-w64-libraries/winpthreads/COPYING"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "libunibreak",
+    "repository": "adah1972/libunibreak",
+    "notice_revision": "f8172fe771ef620112247cadfb876aecaa4f769e",
+    "files": [
+      "LICENCE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "zlib",
+    "repository": "madler/zlib",
+    "notice_revision": "69a1ffeda6062e638be2dd9792d2bfc8d0fffea2",
+    "files": [
+      "LICENSE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "libpng",
+    "repository": "pnggroup/libpng",
+    "notice_revision": "a70313dbb68987be6834879f449d527687ec659a",
+    "files": [
+      "LICENSE.md",
+      "png.h"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "brotli",
+    "repository": "google/brotli",
+    "notice_revision": "d89c4b1c52e25ddafe047bc78bbee5c1e24b1809",
+    "files": [
+      "LICENSE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "vulkan-shim",
+    "repository": "BtbN/Vulkan-Shim-Loader",
+    "notice_revision": "65b3936528cd92eb4ea3de485d03f858a3850484",
+    "files": [
+      "LICENSE"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  },
+  {
+    "component": "vulkan-headers",
+    "repository": "KhronosGroup/Vulkan-Headers",
+    "notice_revision": "9fbc2a782ee3f8a4db64e7d991e23da75e893f44",
+    "files": [
+      "LICENSE.md",
+      "LICENSES/Apache-2.0.txt",
+      "LICENSES/MIT.txt"
+    ],
+    "purpose": "Copyright and license notices; exact linked binaries are identified separately by the linker map and archive hashes"
+  }
+]

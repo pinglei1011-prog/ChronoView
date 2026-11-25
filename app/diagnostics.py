@@ -3,7 +3,9 @@ import json
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPointF, Qt, QTimer
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QApplication
 
 from app.core.library import sort_items
@@ -100,8 +102,17 @@ class MediaVerification(QObject):
                 if "无法" in widget.status.text():
                     raise RuntimeError(widget.status.text())
                 player = widget.player
-                if player is None or player.position() < 100 or not widget.surface.videoSink().videoFrame().isValid():
+                if player is None or player.position() < 100 or not widget.has_video_frame():
                     return
+                assert player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                # Opening a modal viewer can transfer the album's final mouse
+                # release onto its video surface. It must keep autoplaying.
+                release = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(10, 10),
+                                      Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+                                      Qt.KeyboardModifier.NoModifier)
+                QCoreApplication.sendEvent(widget.surface, release)
+                assert player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                self.steps.append(f"autoplay_ignores_opening_release_video_{self.position}")
                 widget.toggle()
                 widget.position_slider.setValue(player.duration() // 2)
                 widget.seek_from_slider()
@@ -148,6 +159,7 @@ class MediaVerification(QObject):
         self.timer.stop()
         self.report.parent.mkdir(parents=True, exist_ok=True)
         self.report.write_text(json.dumps({"success": success, "steps": self.steps,
+            "video_backend": self.viewer.video.backend_name if self.viewer else None,
             "error": error, "elapsed_seconds": round(time.monotonic() - self.started, 2)}, indent=2), encoding="utf-8")
         if self.viewer:
             self.viewer.close()

@@ -190,7 +190,8 @@ def test_cancel_running_scan_restores_snapshot(tmp_path, qapp, monkeypatch):
         qapp.processEvents()
 
 
-def test_double_click_opens_once_and_enter_works(tmp_path, qapp, monkeypatch):
+@pytest.mark.parametrize("kind", ["image", "video"])
+def test_double_click_opens_once_and_enter_works(kind, tmp_path, qapp, monkeypatch):
     settings = QSettings(str(tmp_path / "click.ini"), QSettings.Format.IniFormat)
     window = MainWindow(settings, auto_load=False)
     root = make_library(tmp_path / "library")
@@ -213,14 +214,16 @@ def test_double_click_opens_once_and_enter_works(tmp_path, qapp, monkeypatch):
     window.show()
     try:
         qapp.processEvents()
-        index = window.grid.media_model.index(0, 0)
+        row = next(i for i, item in enumerate(window.grid.media_model.items) if item.kind == kind)
+        index = window.grid.media_model.index(row, 0)
         rect = window.grid.visualRect(index)
         QTest.mouseClick(window.grid.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        assert opened == [], "A video's first click must not open a dialog beneath the second click"
         QTest.mouseDClick(window.grid.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
-        assert opened == [0]
+        assert opened == [row]
         window.grid.setFocus()
         QTest.keyClick(window.grid, Qt.Key.Key_Return)
-        assert opened == [0, 0]
+        assert opened == [row, row]
     finally:
         window.close()
         qapp.processEvents()

@@ -58,6 +58,10 @@ def test_real_play_pause_seek_volume_and_release(position, videos, qapp):
         wait_until(qapp, lambda: widget.surface.videoSink().videoFrame().isValid()
                    and widget.player.duration() > 2000 and widget.player.position() > 0)
         assert widget.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        # The final release of the album's opening double-click can arrive in
+        # the new video window, without a press there. It must not pause it.
+        QTest.mouseRelease(widget.surface, Qt.MouseButton.LeftButton)
+        assert widget.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         QTest.mouseClick(widget.surface, Qt.MouseButton.LeftButton)
         assert widget.player.playbackState() == QMediaPlayer.PlaybackState.PausedState
         QTest.mouseClick(widget.surface, Qt.MouseButton.LeftButton)
@@ -93,6 +97,86 @@ def test_real_play_pause_seek_volume_and_release(position, videos, qapp):
         widget.release()
         widget.close()
         qapp.processEvents()
+
+
+@pytest.mark.parametrize("position", [0, 1, 2])
+@pytest.mark.parametrize("backend", ["qt", "mpv"])
+def test_album_double_click_autoplays_without_a_second_play_click(backend, position, videos, tmp_path, qapp, monkeypatch):
+    from time import monotonic
+    from PySide6.QtCore import QSettings, QTimer
+    from app.ui.main_window import MainWindow
+    if backend == "mpv":
+        from app.services.mpv_client import library_path
+        if qapp.platformName() != "windows" or not library_path().is_file():
+            pytest.skip("Requires native Windows and libmpv runtime")
+    monkeypatch.setenv("CHRONOVIEW_VIDEO_BACKEND", backend)
+
+    window = MainWindow(QSettings(str(tmp_path / "autoplay.ini"), QSettings.Format.IniFormat),
+                        auto_load=False)
+    window.items = scan_library(videos[position].parent).items
+    window.select_route(("all",))
+    window.show()
+    observations = {"opened": 0, "release_sent": False, "first_position": None, "advanced": False}
+    errors = []
+    timer = QTimer()
+    started = monotonic()
+
+    def inspect_viewer():
+        viewer = getattr(window, "active_viewer", None)
+        try:
+            assert monotonic() - started < 12, "Double-click did not start advancing video"
+            if viewer is None:
+                return
+            if not observations["release_sent"]:
+                observations["opened"] += 1
+                viewer.video.audio.setMuted(True)
+                # Simulate the physical opening gesture's last release being
+                # delivered to the newly created video surface.
+                QTest.mouseRelease(viewer.video.surface, Qt.MouseButton.LeftButton)
+                observations["release_sent"] = True
+            widget = viewer.video
+            assert not widget.failed, widget.status.text()
+            player = widget.player
+            if player.position() < 150 or not widget.has_video_frame():
+                return
+            assert player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            if observations["first_position"] is None:
+                observations["first_position"] = player.position()
+            if player.position() >= observations["first_position"] + 100:
+                assert widget.status.text() == ""
+                observations["advanced"] = True
+                timer.stop()
+                viewer.close()
+        except Exception as exc:
+            errors.append(str(exc))
+            timer.stop()
+            if viewer:
+                viewer.close()
+
+    timer.setInterval(25)
+    timer.timeout.connect(inspect_viewer)
+    try:
+        qapp.processEvents()
+        row = next(i for i, item in enumerate(window.grid.media_model.items)
+                   if item.path == videos[position])
+        index = window.grid.media_model.index(row, 0)
+        center = window.grid.visualRect(index).center()
+        QTest.mouseClick(window.grid.viewport(), Qt.MouseButton.LeftButton, pos=center)
+        assert not getattr(window, "viewer_open", False)
+        timer.start()
+        QTest.mouseDClick(window.grid.viewport(), Qt.MouseButton.LeftButton, pos=center)
+        QTest.mouseRelease(window.grid.viewport(), Qt.MouseButton.LeftButton, pos=center)
+        assert not errors, errors
+        assert observations["opened"] == 1 and observations["advanced"], observations
+    finally:
+        timer.stop()
+        if getattr(window, "active_viewer", None):
+            window.active_viewer.close()
+        window.close()
+        qapp.processEvents()
+        if backend == "mpv":
+            from app.services.mpv_client import shutdown_all
+            shutdown_all()
 
 
 def test_broken_video_and_missing_file(tmp_path, qapp):

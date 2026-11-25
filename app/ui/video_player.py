@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QSize, QTimer, QUrl, Qt, SIGNAL, Signal, Slot, qVersion
@@ -22,6 +23,7 @@ class VideoSurface(QVideoWidget):
         self._native_window = None
         self._presenting = False
         self._ignore_release = False
+        self._pointer_pressed = False
         self._recent_click = QTimer(self)
         self._recent_click.setSingleShot(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -78,6 +80,7 @@ class VideoSurface(QVideoWidget):
                 self.playback_toggle_requested.emit()
             self._recent_click.stop()
             self._ignore_release = True
+            self._pointer_pressed = False
             self.fullscreen_requested.emit()
             event.accept()
         else:
@@ -88,6 +91,7 @@ class VideoSurface(QVideoWidget):
             # A fullscreen window transition may lose the double-click's final
             # release. A fresh ordinary press starts a new gesture regardless.
             self._ignore_release = False
+            self._pointer_pressed = True
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -96,9 +100,12 @@ class VideoSurface(QVideoWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self._ignore_release:
                 self._ignore_release = False
-            else:
+            elif self._pointer_pressed:
                 self.playback_toggle_requested.emit()
                 self._recent_click.start(QGuiApplication.styleHints().mouseDoubleClickInterval())
+            # A dialog can open between the album's double-click press and
+            # release. Only toggle for a complete click begun on this surface.
+            self._pointer_pressed = False
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -106,10 +113,14 @@ class VideoSurface(QVideoWidget):
     def reset_click_state(self):
         self._recent_click.stop()
         self._ignore_release = False
+        self._pointer_pressed = False
 
 
-class VideoPlayer(QWidget):
+class QtVideoPlayer(QWidget):
     fullscreen_requested = Signal()
+    surface_type = VideoSurface
+    audio_type = QAudioOutput
+    backend_name = "qt"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,7 +128,7 @@ class VideoPlayer(QWidget):
         self.player = None
         self.generation = 0
         self.failed = False
-        self.audio = QAudioOutput(self)
+        self.audio = self.audio_type(self)
         self.audio.setVolume(.6)
 
         layout = QVBoxLayout(self)
@@ -131,7 +142,7 @@ class VideoPlayer(QWidget):
         self.status.hide()
         layout.addWidget(self.status)
 
-        self.surface = VideoSurface()
+        self.surface = self.surface_type()
         self.surface.setStyleSheet("background: #0b0d11;")
         self.surface.fullscreen_requested.connect(self.fullscreen_requested)
         self.surface.playback_toggle_requested.connect(self.toggle)
@@ -189,7 +200,12 @@ class VideoPlayer(QWidget):
         self.status.setText(message)
         self.status.setVisible(bool(message))
 
+    def has_video_frame(self):
+        return self.surface.videoSink().videoFrame().isValid()
+
     def load(self, path: Path, autoplay=True):
+        logging.info("Opening video: %s (GPU texture conversion disabled=%s)",
+                     path, os.environ.get("QT_DISABLE_HW_TEXTURES_CONVERSION", "unset"))
         self.release()
         self.failed = False
         self.generation += 1
@@ -301,3 +317,10 @@ class VideoPlayer(QWidget):
             QMetaObject.invokeMethod(player, "stop", Qt.ConnectionType.QueuedConnection)
             player.deleteLater()
         self.surface.update()
+
+
+def VideoPlayer(parent=None):
+    if os.environ.get("CHRONOVIEW_VIDEO_BACKEND", "mpv") == "mpv":
+        from app.ui.mpv_player import MpvVideoPlayer
+        return MpvVideoPlayer(parent)
+    return QtVideoPlayer(parent)

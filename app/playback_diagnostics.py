@@ -1,10 +1,11 @@
 """Explicit, read-only playback probe for the bundled executable."""
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Slot, qVersion
+from PySide6.QtCore import QObject, QTimer, Slot, Qt, qVersion
 from PySide6.QtMultimedia import QMediaMetaData, QMediaPlayer, QVideoFrame
 from PySide6.QtWidgets import QApplication
 
@@ -18,9 +19,14 @@ class PlaybackMeasurement(QObject):
         self.source, self.report = source, report
         self.finished = False
         self.frames, self.submissions, self.ticks = [], [], []
+        self.unexposed_frames = 0
         self.video_size = None
         self.window = VideoPlayer()
         self.window.setWindowTitle("ChronoView · 静音播放检查")
+        # Measurement windows must remain visible; Windows can otherwise
+        # occlude later subprocesses and Qt deliberately skips their renders.
+        # This flag applies only to the explicit diagnostic command.
+        self.window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         self.window.resize(1080, 650)
         self.window.audio.setMuted(True)
         self.window.surface.videoSink().videoFrameChanged.connect(self.frame)
@@ -46,6 +52,9 @@ class PlaybackMeasurement(QObject):
         if frame.isValid():
             self.frames.append(time.perf_counter())
             self.video_size = frame.size()
+            native = self.window.surface._native_window
+            if native is not None and not native.isExposed():
+                self.unexposed_frames += 1
 
     @Slot()
     def presented(self):
@@ -76,7 +85,9 @@ class PlaybackMeasurement(QObject):
             "version": __version__, "qt_version": qVersion(), "executable": sys.executable,
             "source": str(self.source), "elapsed_s": time.perf_counter() - self.started,
             "presentation": "frame-driven" if self.window.surface.frame_driven else "qt-default",
+            "gpu_texture_conversion_disabled": os.environ.get("QT_DISABLE_HW_TEXTURES_CONVERSION"),
             "delivered_frames": len(self.frames), "submitted_frames": len(self.submissions),
+            "unexposed_frames": self.unexposed_frames,
             "delivery_fps": self.rate(self.frames), "native_submission_fps": self.rate(self.submissions),
             "submission_gap_p95_ms": gaps[int(len(gaps) * .95)] if gaps else None,
             "ui_gap_max_ms": max(ui_gaps, default=0),

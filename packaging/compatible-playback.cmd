@@ -1,4 +1,6 @@
 @echo off
 setlocal
+set CHRONOVIEW_VIDEO_BACKEND=qt
+set QT_DISABLE_HW_TEXTURES_CONVERSION=1
 set "CHRONOVIEW_VIDEO_PRESENTATION=qt"
 start "" "%~dp0ChronoView.exe"
