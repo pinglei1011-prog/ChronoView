@@ -1,0 +1,40 @@
+{
+  "container": "ghcr.io/btbn/ffmpeg-builds/win64-lgpl@sha256:f0fd165f48e52858310ef59e06430ec8a7d88da7adf5a5860d23865a20650772",
+  "sources": [
+    {
+      "name": "mpv",
+      "url": "https://codeload.github.com/mpv-player/mpv/tar.gz/b0841e8c4d156b8403dc1876c4cbd9011eb583f3",
+      "sha256": "a4a79fa6ca728762ac407734b0f93dbcbba250c3bb3bf97b77a342042be802e4",
+      "revision": "b0841e8c4d156b8403dc1876c4cbd9011eb583f3",
+      "archive": "mpv.tar.gz"
+    },
+    {
+      "name": "libplacebo",
+      "url": "https://codeload.github.com/haasn/libplacebo/tar.gz/275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
+      "sha256": "adbca47395410ada01414bc527e0103c716b9b758be857464c40e5ff0ec695be",
+      "revision": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
+      "archive": "libplacebo.tar.gz"
+    },
+    {
+      "name": "fribidi",
+      "url": "https://codeload.github.com/fribidi/fribidi/tar.gz/68162babff4f39c4e2dc164a5e825af93bda9983",
+      "sha256": "fa34a057a414c85f7e1f3c0fd717bc93d74d370ed474ef2feca90868b4938f72",
+      "revision": "68162babff4f39c4e2dc164a5e825af93bda9983",
+      "archive": "fribidi.tar.gz"
+    },
+    {
+      "name": "libass",
+      "url": "https://codeload.github.com/libass/libass/tar.gz/bbb3c7f1570a4a021e52683f3fbdf74fe492ae84",
+      "sha256": "93796cd47cc878220f3466352315888daba8a48d673cdd8c44350b26f516e064",
+      "revision": "bbb3c7f1570a4a021e52683f3fbdf74fe492ae84",
+      "archive": "libass.tar.gz"
+    },
+    {
+      "name": "ffmpeg",
+      "url": "https://ffmpeg.org/releases/ffmpeg-7.1.3.tar.xz",
+      "sha256": "f0bf043299db9e3caacb435a712fc541fbb07df613c4b893e8b77e67baf3adbe",
+      "revision": "n7.1.3",
+      "archive": "ffmpeg-7.1.3.tar.xz"
+    }
+  ]
+}
