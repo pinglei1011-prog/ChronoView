@@ -14,8 +14,9 @@ work = root / 'native-work'
 work.mkdir(exist_ok=True)
 for entry in lock['sources']:
     archive = sources / entry['archive']
-    with urllib.request.urlopen(entry['url'], timeout=120) as response, archive.open('wb') as output:
-        shutil.copyfileobj(response, output)
+    if not archive.exists():
+        with urllib.request.urlopen(entry['url'], timeout=120) as response, archive.open('wb') as output:
+            shutil.copyfileobj(response, output)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != entry['sha256']:
         raise RuntimeError('Source checksum mismatch: ' + entry['name'])
     folder = work / entry['name']
