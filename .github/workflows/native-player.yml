@@ -22,12 +22,21 @@ jobs:
           $CC --version > native-output/metadata/compiler.txt
           pkg-config --list-all > native-output/metadata/packages.txt
           for f in /opt/ffbuild/lib/pkgconfig/*.pc; do cat "$f"; done > native-output/metadata/pkgconfig.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: native-cache/ffmpeg
+          key: chronoview-ffmpeg-713-minimal-v1
       - uses: actions/upload-artifact@v4
         with:
           name: native-toolchain-metadata
           path: native-output/metadata
       - name: Build fixed-source LGPL player and relinking kit
         run: bash scripts/native/build.sh
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: native-cache/ffmpeg
+          key: chronoview-ffmpeg-713-minimal-v1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

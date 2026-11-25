@@ -3,12 +3,18 @@ set -euo pipefail
 ROOT="$PWD"
 PREFIX=/opt/ffbuild
 python3 scripts/native/fetch_sources.py
+export WINEPREFIX="$ROOT/native-work/wine"
+export WINEDEBUG=-all
+mkdir -p "$WINEPREFIX"
 src() { find "$ROOT/native-work/$1" -mindepth 1 -maxdepth 1 -type d | head -n 1; }
 export CFLAGS="-O2 -pipe -static-libgcc -I$PREFIX/include"
 export CXXFLAGS="-O2 -pipe -static-libgcc -static-libstdc++ -I$PREFIX/include"
 export LDFLAGS="-static-libgcc -static-libstdc++ -L$PREFIX/lib"
 
 echo '::group::FFmpeg 7.1.3, built-in codecs and Windows hardware decoding'
+if [ -f "$ROOT/native-cache/ffmpeg/opt/ffbuild/lib/libavcodec.a" ]; then
+  cp -a "$ROOT/native-cache/ffmpeg/opt/ffbuild/." "$PREFIX/"
+else
 pushd "$(src ffmpeg)"
 ./configure --prefix="$PREFIX" --target-os=mingw32 --arch=x86_64 \
   --enable-cross-compile --cross-prefix="$FFBUILD_CROSS_PREFIX" \
@@ -19,8 +25,10 @@ pushd "$(src ffmpeg)"
   --disable-avdevice --enable-d3d11va --enable-dxva2 \
   --extra-cflags="$CFLAGS" --extra-cxxflags="$CXXFLAGS" --extra-ldflags="$LDFLAGS"
 make -j"$(nproc)"
-make install
+make install DESTDIR="$ROOT/native-cache/ffmpeg"
+cp -a "$ROOT/native-cache/ffmpeg/opt/ffbuild/." "$PREFIX/"
 popd
+fi
 echo '::endgroup::'
 
 echo '::group::Fixed-source libplacebo, D3D11 only'
