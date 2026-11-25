@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$PWD"
 PREFIX=/opt/ffbuild
 python3 scripts/native/fetch_sources.py
-export WINEPREFIX="$ROOT/native-work/wine"
+export WINEPREFIX=/tmp/chronoview-native-wine
 export WINEDEBUG=-all
 mkdir -p "$WINEPREFIX"
 src() { find "$ROOT/native-work/$1" -mindepth 1 -maxdepth 1 -type d | head -n 1; }
@@ -63,7 +63,7 @@ meson setup "$MPV/build-cv" "$MPV" --cross-file=/cross.meson \
   --prefix="$PREFIX" --buildtype=release --default-library=shared --prefer-static \
   -Dauto_features=disabled -Dgpl=false -Dcplayer=false -Dlibmpv=true -Dbuild-date=false \
   -Dlua=disabled -Djavascript=disabled -Dgl=disabled -Dvulkan=disabled \
-  -Dd3d11=enabled -Dwasapi=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
+  -Dd3d11=enabled -Dwasapi=enabled -Dwin32-threads=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
   -Dc_link_args="$LDFLAGS -Wl,-Map,$ROOT/native-work/native-link.map" \
   -Dcpp_link_args="$LDFLAGS -Wl,-Map,$ROOT/native-work/native-link.map"
 meson compile -C "$MPV/build-cv" -j "$(nproc)"
