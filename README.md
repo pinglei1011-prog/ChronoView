@@ -4,15 +4,19 @@ Windows 本地照片与视频浏览器，Python + PySide6 编写。照片管理�
 
 [下载正式版：安装包、绿色版及配套源码](https://github.com/pinglei1011-prog/ChronoView/releases/tag/V1.0)。安装版适合日常使用，绿色版解压整个文件夹后运行 ChronoView.exe。不要只复制 EXE，须保留 _internal 和 licenses。
 
+当前 V1.0 已合入设置界面和稳定性专项修复，原生回归 169 项通过、1 项跳过；完整发布说明见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。STABILITY_REPORT.md 中“未推送”记录的是本地验收阶段，验收后已按用户授权同步本次发布。
+
 ## 使用
 
+- 侧栏底部的齿轮“设置”打开独立设置浮层，支持浅色/深色外观和照片库位置记忆；“关于 ChronoView”集中展示图标、版本、宣传语、隐私说明、GitHub 仓库、版本更新和开源许可。版本号仅在关于模块展示。打开设置不会打开或重新扫描照片库，关闭后保留当前分类与浏览位置；设置中同样支持 Ctrl+L 隐藏媒体。
 - 启动直接进入主界面隐私页，主动打开照片库后才显示媒体；没有独立启动欢迎页。隐私页或 Ctrl+L 可随时隐藏照片、目录和统计，并停止查看器视频。它用于避免误展示，不提供密码、加密或缓存擦除。
 - 全部照片显示照片与视频的完整混合列表，默认按文件名时间从旧到新；可切换从新到旧。左侧“全部照片 → 年份 → 月份”保留单击展开/收起，年份升序、月份升序；未识别日期仅有内容时出现。年份页面仍使用无封面的月份卡片。
 - 缩略图下只显示日期时间，文件名和路径可悬停查看。单击选中，双击或 Enter 打开；视频打开并准备好后自动播放。视频封面中央有播放按钮，可读取时显示时长。
 - 查看器左右键连续切换照片和视频，照片画布两侧及顶部提供导航按钮。照片可缩放、平移、适应窗口和原始尺寸查看；缩略图“完整/铺满”只改变预览方式。
 - 视频画面单击暂停/继续，双击或 F11 全屏；支持进度拖动、音量、空格播放暂停、EOF 后重播。Esc 先退出全屏，再关闭查看器。
 - F5 刷新、Ctrl+O 选择目录、Ctrl+B 切换侧栏。侧栏隐藏后网格利用可用宽度，日期在卡片下居中。深浅主题、卡片大小及是否记住照片库位置可调整。
-- 递归扫描、SQLite 索引和缩略图缓存保留。主动打开已知库可从索引恢复；目录内容改变后按 F5，盘符变化时重新选目录。硬盘断开显示离线状态和读取提示，不修改原文件。
+- 索引通过磁盘卷身份和相对目录识别照片库；同一硬盘换盘符后重新选目录可以恢复记录，不会把同盘符的另一块硬盘当成原库。旧索引首次升级需连接原硬盘重新扫描一次。新增内容按 F5 更新，索引恢复时检查已有文件的删除或修改。
+- 设置中的“本地数据”支持清除缩略图缓存，或清除照片库索引、上次目录、日志和缓存；执行前会说明范围并确认，原始媒体不会被删除。缩略图磁盘缓存默认上限 5 GiB，按最近使用时间淘汰，清理超过 90 天未使用的封面。磁盘空间不足时使用内存预览。
 
 ## 视频播放
 
@@ -20,13 +24,15 @@ Windows 本地照片与视频浏览器，Python + PySide6 编写。照片管理�
 
 已加入错误提示、异步关闭、旧事件隔离和自动播放手势防误暂停。独立 DLL 加载失败时显示友好提示。可关闭全部窗口后使用随包的“兼容播放.cmd”改用 Qt 后端；该路径保留硬件解码，默认避开已定位的 GPU 纹理空指针路径。兼容模式的流畅度可能低于默认内核。
 
-支持的文件后缀包括 MP4/MOV/MKV/AVI；实际测试范围和未测试能力见 [VALIDATION.md](VALIDATION.md)。HEIC/HEIF 解码器不包含在当前包中；缓存暂不自动清理。
+主界面重复打开查看器时复用一个 libmpv 实例；关闭查看器停止、静音并清空媒体标签，退出软件或清除本地记录时完全释放。照片默认按显示尺寸解码，查看原始尺寸或放大时补载原图细节。
+
+支持的文件后缀包括 MP4/MOV/MKV/AVI；实际测试范围见 [STABILITY_REPORT.md](STABILITY_REPORT.md) 和 [VALIDATION.md](VALIDATION.md)。HEIC/HEIF 解码器不包含在当前包中。
 
 ## 安装与本机数据
 
 安装版按当前用户安装，默认位于 `%LOCALAPPDATA%\Programs\ChronoView`，提供开始菜单入口、可选桌面快捷方式和卸载入口。绿色版和安装版使用相同程序内容。卸载不主动清理照片库、设置、索引或缓存。
 
-设置使用 QSettings，通常位于 `HKCU\Software\ChronoView\ChronoView`。索引、日志和缩略图通常位于 `%LOCALAPPDATA%\ChronoView\ChronoView`；实际位置由 QStandardPaths 决定。`--settings-file` 可隔离测试设置及索引。日志可能包含本机媒体路径，反馈问题前可自行脱敏。
+设置使用 QSettings，通常位于 `HKCU\Software\ChronoView\ChronoView`。索引、日志和缩略图通常位于 `%LOCALAPPDATA%\ChronoView\ChronoView`；实际位置由 QStandardPaths 决定。`--settings-file` 将设置、索引、缓存及日志隔离到该文件的目录。应用日志默认隐藏媒体文件名和本机绝对路径；手动播放诊断报告为了定位问题会记录输入路径。隐私页用于防止误展示，索引与封面仍为本机明文数据；需要清理时使用设置中的明确清除操作。
 
 ## 开发与构建
 
@@ -43,7 +49,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_installer.ps1 
 .venv\Scripts\python.exe scripts\package_release.py
 ```
 
-首次源码构建从本版本绿色包获取并验证固定 DLL；已有 vendor DLL 时只做 SHA-256 检查。重新编译播放内核见 scripts/native、固定源码锁及 .github/workflows/native-player.yml。配套源码包同时提供 native 构建记录、精确静态库重链接输入和对应 LGPL 源码。Inno Setup 编译器需另备；测试素材生成工具 imageio-ffmpeg 不进入运行包。
+首次源码构建从本版本绿色包获取并验证固定 DLL；已有 vendor DLL 时只做 SHA-256 检查。重新编译播放内核见 scripts/native、固定源码锁及 .github/workflows/native-player.yml。配套源码包同时提供 native 构建记录、精确静态库重链接输入和对应 LGPL 源码；prepare_sources.py 可从 dist 中的当前配套源码 ZIP 恢复原生构建材料，无需保留历史 work 下载目录。安装包脚本优先使用 tools/InnoSetup/ISCC.exe，也可通过 -Compiler 指定编译器；测试素材生成工具 imageio-ffmpeg 不进入运行包。
 
 ## 第三方许可
 

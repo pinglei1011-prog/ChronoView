@@ -8,6 +8,8 @@ from PySide6.QtCore import QObject, QTimer, Qt
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QApplication
 from app.ui.mpv_player import MpvVideoPlayer
+from app.services.mpv_client import pending_shutdowns
+from app.ui.photo_viewer import has_pending_decodes
 
 
 class MpvPlaybackMeasurement(QObject):
@@ -73,4 +75,13 @@ class MpvPlaybackMeasurement(QObject):
         self.report.write_text(json.dumps(result, indent=2,ensure_ascii=False),encoding="utf-8")
         self.window.shutdown()
         self.window.close()
-        QTimer.singleShot(200, lambda: QApplication.instance().exit(0 if result["success"] else 1))
+        self.exit_code = 0 if result["success"] else 1
+        self.drain_timer = QTimer(self)
+        self.drain_timer.setInterval(20)
+        self.drain_timer.timeout.connect(self.exit_when_released)
+        self.drain_timer.start()
+
+    def exit_when_released(self):
+        if not pending_shutdowns() and not has_pending_decodes():
+            self.drain_timer.stop()
+            QApplication.instance().exit(self.exit_code)

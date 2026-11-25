@@ -17,5 +17,8 @@ Copy-Item -LiteralPath packaging\compatible-playback.cmd -Destination (Join-Path
 if (Test-Path -LiteralPath 'VALIDATION.md') {
     Copy-Item -LiteralPath VALIDATION.md -Destination (Join-Path $releasePath 'VALIDATION.md')
 }
+if (Test-Path -LiteralPath 'STABILITY_REPORT.md') {
+    Copy-Item -LiteralPath STABILITY_REPORT.md -Destination (Join-Path $releasePath 'STABILITY_REPORT.md')
+}
 Copy-Item -LiteralPath assets\licenses -Destination (Join-Path $releasePath 'licenses') -Recurse -Force
 Write-Host ('Portable application: ' + (Join-Path $releasePath 'ChronoView.exe'))

@@ -23,9 +23,9 @@ def test_startup_waits_for_explicit_open_even_with_index(tmp_path, qapp, monkeyp
     loads = []
     original_load = LibraryIndex.load
 
-    def load(index, directory):
+    def load(index, directory, **kwargs):
         loads.append(directory)
-        return original_load(index, directory)
+        return original_load(index, directory, **kwargs)
 
     monkeypatch.setattr(LibraryIndex, "load", load)
     window = MainWindow(settings)

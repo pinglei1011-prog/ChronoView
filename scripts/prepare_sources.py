@@ -25,9 +25,6 @@ source_lock = {entry["name"]: entry for entry in json.loads((root / "packaging/q
 def fetch(entry):
     name, url = entry
     destination = target / name
-    previous = root / "dist/ChronoView-1.0.0-third-party-sources" / name
-    if not destination.exists() and previous.exists():
-        shutil.copyfile(previous, destination)
     if not destination.exists():
         temp = destination.with_suffix('.part')
         with urllib.request.urlopen(url, timeout=30) as response, temp.open('wb') as stream:
@@ -47,21 +44,25 @@ shutil.copyfile(root / "assets/licenses/ffmpeg-build.json", target / "ffmpeg-bui
 shutil.copyfile(root / "assets/licenses/README.md", target / "README.md")
 native = target / "native"
 native.mkdir(exist_ok=True)
-kit = root / "work/release-1.1/chronoview-native-player.zip"
-if kit.exists():
-    with zipfile.ZipFile(kit) as source:
+if not (native / "metadata/sources.lock.json").exists():
+    companion = target.with_name(target.name + ".zip")
+    assert companion.is_file(), "Download the matching third-party-sources.zip into dist first"
+    prefix = target.name + "/native/"
+    with zipfile.ZipFile(companion) as source:
         for name in source.namelist():
-            path = Path(name)
-            assert not path.is_absolute() and ".." not in path.parts
-            # Retain headers used by this minimal player; the toolchain also
-            # contains unrelated libraries that are not part of the runtime.
-            if name.startswith("relink/include/") and len(path.parts) == 3:
+            if not name.startswith(prefix) or name.endswith("/"):
                 continue
-            if name != "libmpv-2.dll":
-                source.extract(name, native)
-else:
-    assert (native / "metadata/sources.lock.json").exists(), "Download the native source/relinking kit from this release first"
+            path = Path(name[len(prefix):])
+            destination = (native / path).resolve()
+            assert not path.is_absolute() and ".." not in path.parts
+            assert destination.is_relative_to(native.resolve())
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source.open(name) as src, destination.open("wb") as output:
+                shutil.copyfileobj(src, output)
+assert (native / "metadata/sources.lock.json").is_file(), "Native source metadata missing from companion"
 lock = json.loads((native / "metadata/sources.lock.json").read_text())
+expected_lock = json.loads((root / "scripts/native/sources.lock.json").read_text())
+assert lock["sources"] == expected_lock["sources"], "Native sources do not match the current player build"
 for entry in lock["sources"]:
     assert hashlib.sha256((native / "sources" / entry["archive"]).read_bytes()).hexdigest() == entry["sha256"]
 shutil.copytree(root / "assets/licenses", target / "notices", dirs_exist_ok=True)

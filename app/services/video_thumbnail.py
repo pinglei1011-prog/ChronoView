@@ -29,6 +29,11 @@ class VideoThumbnailJob(QObject):
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(lambda: self.finish(QImage(), "视频封面读取超时，请重试或检查硬盘连接。"))
+        self.release_timer = QTimer(self)
+        self.release_timer.setInterval(20)
+        self.release_timer.timeout.connect(self._release_when_stopped)
+        self.disposing = False
+        self.stop_requested = False
 
     def start(self):
         self.timer.start(12000)
@@ -72,4 +77,25 @@ class VideoThumbnailJob(QObject):
     def stop_decoder(self):
         # Teardown belongs on the native event queue, outside Python callbacks.
         # Ignore queued LoadedMedia/frame signals once cancellation has begun.
-        QMetaObject.invokeMethod(self.player, "stop", Qt.ConnectionType.QueuedConnection)
+        if not self.stop_requested:
+            self.stop_requested = True
+            QMetaObject.invokeMethod(self.player, "stop", Qt.ConnectionType.QueuedConnection)
+
+    def dispose(self):
+        """Do not delete the owner before its queued native stop has actually run."""
+        if self.disposing:
+            return
+        self.disposing = True
+        self.sink.videoFrameChanged.disconnect(self.on_frame)
+        self.player.errorOccurred.disconnect(self.on_error)
+        self.player.mediaStatusChanged.disconnect(self.on_status)
+        self.cancel()
+        self.release_timer.start()
+
+    def _release_when_stopped(self):
+        if self.player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+            return
+        self.release_timer.stop()
+        self.player.setVideoSink(None)
+        self.player.destroyed.connect(self.deleteLater)
+        self.player.deleteLater()

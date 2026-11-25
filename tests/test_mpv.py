@@ -125,6 +125,50 @@ def test_mpv_real_native_mouse_and_shortcut_messages(clips, native_mpv, qapp):
         widget.close()
 
 
+def test_main_window_reuses_native_engine_and_private_close_stops_audio(clips, native_mpv, qapp, tmp_path, monkeypatch):
+    from PySide6.QtCore import QTimer
+    from app.ui.main_window import MainWindow
+    monkeypatch.setenv('CHRONOVIEW_VIDEO_BACKEND', 'mpv')
+    window = MainWindow(QSettings(str(tmp_path / 'reuse.ini'), QSettings.Format.IniFormat), auto_load=False)
+    window.items = scan_library(clips[0].parent).items
+    window.root = clips[0].parent
+    window.select_route(('all',))
+    window.show()
+    seen, failures = [], []
+    timer = QTimer(window)
+    timer.setInterval(20)
+    def close_when_playing():
+        viewer = getattr(window, 'active_viewer', None)
+        if viewer and viewer.video.has_video_frame() and viewer.video.player.position() > 100:
+            seen.append(viewer.video.engine)
+            window.show_privacy()
+            timer.stop()
+    timer.timeout.connect(close_when_playing)
+    deadline = QTimer(window)
+    deadline.setSingleShot(True)
+    def timeout():
+        failures.append('viewer did not autoplay')
+        if getattr(window, 'active_viewer', None): window.active_viewer.close()
+    deadline.timeout.connect(timeout)
+    try:
+        for _ in range(3):
+            window.select_route(('all',))
+            timer.start(); deadline.start(10000)
+            window.open_item(window.grid.media_model.index(0, 0))
+            deadline.stop()
+            assert not failures
+            cached = window._cached_viewer
+            assert cached is not None and not cached.items and cached.video.player is None
+            assert not cached.isVisible() and window.route == ('privacy',)
+            wait_until(qapp, lambda: cached.video.engine.get_text('mute') == 'yes')
+        assert len({id(engine) for engine in seen}) == 1
+    finally:
+        timer.stop(); deadline.stop()
+        window.close()
+        wait_until(qapp, lambda: window._close_ready)
+        assert not _engines
+
+
 def test_mpv_missing_corrupt_and_rapid_switch_privacy_release(clips, native_mpv, qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("CHRONOVIEW_VIDEO_BACKEND", "mpv")
     bad = tmp_path / "VID20261101120000.mp4"

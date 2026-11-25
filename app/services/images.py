@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 from PySide6.QtGui import QImage
@@ -15,23 +16,64 @@ else:
     HEIF_AVAILABLE = True
 
 
-def read_image(path: Path, edge: int | None = None) -> QImage:
-    if path.suffix.lower() in {".heic", ".heif"} and not HEIF_AVAILABLE:
-        raise ValueError("HEIC / HEIF 需要可选的 pillow-heif 解码器，详见 README。")
+class ImageReadCancelled(Exception):
+    """A superseded decode; never present cancellation as a corrupt photo."""
+
+
+def read_image(path: Path, edge: int | None = None, cancel: Event | None = None) -> QImage:
+    def check_cancel():
+        if cancel is not None and cancel.is_set():
+            raise ImageReadCancelled()
+
+    check_cancel()
     # Pillow opens originals read-only; no metadata is ever saved back.
-    with Image.open(path) as source:
+    try:
+        source = Image.open(path)
+    except UnidentifiedImageError as exc:
+        if path.suffix.lower() in {".heic", ".heif"} and not HEIF_AVAILABLE:
+            raise ValueError("HEIC / HEIF 需要可选的 pillow-heif 解码器，详见 README。") from exc
+        raise
+    with source:
+        original_width, original_height = source.size
+        orientation = source.getexif().get(274, 1)
+        if orientation in (5, 6, 7, 8):
+            original_width, original_height = original_height, original_width
         if edge:
-            source.draft("RGB", (edge, edge))
-        image = ImageOps.exif_transpose(source)
+            scale = min(1.0, edge / max(source.size))
+            draft_size = tuple(max(1, int(dimension * scale)) for dimension in source.size)
+            source.draft("RGB", draft_size)
+        check_cancel()
+        # Downsample before EXIF transpose: transpose otherwise duplicates the
+        # full decoded raster even when the user only needs a screen preview.
         if edge:
-            image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
-        image = image.convert("RGBA")
-        data = image.tobytes("raw", "RGBA")
-        return QImage(data, image.width, image.height, image.width * 4,
-                      QImage.Format.Format_RGBA8888).copy()
+            source.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+        check_cancel()
+        ImageOps.exif_transpose(source, in_place=True)
+        check_cancel()
+        mode = "RGBA" if "A" in source.getbands() or "transparency" in source.info else "RGB"
+        image = source if source.mode == mode else source.convert(mode)
+        try:
+            channels = 4 if mode == "RGBA" else 3
+            fmt = QImage.Format.Format_RGBA8888 if channels == 4 else QImage.Format.Format_RGB888
+            data = image.tobytes("raw", mode)
+            check_cancel()
+            # Own the Qt raster independently of Pillow/Python buffers. RGB
+            # photos no longer incur a full RGBA conversion or EXIF copy.
+            result = QImage(data, image.width, image.height, image.width * channels, fmt).copy()
+            result.setText("chronoview.original_width", str(original_width))
+            result.setText("chronoview.original_height", str(original_height))
+            check_cancel()
+            return result
+        finally:
+            if image is not source:
+                image.close()
 
 
 def image_error_message(error: Exception) -> str:
+    if isinstance(error, MemoryError):
+        return "照片过大，当前可用内存不足。请关闭其他查看器后重试。"
+    if isinstance(error, Image.DecompressionBombError):
+        return "照片尺寸超出安全解码范围，无法在当前环境中读取。"
     if isinstance(error, FileNotFoundError):
         return "原文件不存在或移动硬盘未连接。请检查硬盘，盘符变化后重新选择文件夹。"
     if isinstance(error, PermissionError):

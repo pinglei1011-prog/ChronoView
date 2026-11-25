@@ -4,13 +4,13 @@ ABI reference: mpv 0.42.0 include/mpv/client.h (ISC header; LGPL core).
 All returned event data is copied before the next mpv_wait_event call.
 """
 import ctypes as C
+from concurrent.futures import ThreadPoolExecutor
 import locale
 import logging
 import os
 from pathlib import Path
 import sys
 import threading
-import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
@@ -42,11 +42,44 @@ class LogMessage(C.Structure):
     _fields_ = [("prefix", C.c_char_p), ("level", C.c_char_p), ("text", C.c_char_p), ("log_level", C.c_int)]
 
 
+class Node(C.Structure):
+    pass
+
+
+class NodeList(C.Structure):
+    pass
+
+
+class NodeValue(C.Union):
+    _fields_ = [("string", C.c_char_p), ("flag", C.c_int), ("int64", C.c_int64),
+                ("double", C.c_double), ("list", C.POINTER(NodeList)), ("bytes", C.c_void_p)]
+
+
+Node._fields_ = [("u", NodeValue), ("format", C.c_int)]
+NodeList._fields_ = [("num", C.c_int), ("values", C.POINTER(Node)), ("keys", C.POINTER(C.c_char_p))]
+
+
+def command_entry(pointer):
+    """Copy only the documented loadfile result before mpv reuses event memory."""
+    if not pointer:
+        return None
+    node = C.cast(pointer, C.POINTER(Node)).contents
+    if node.format == 8 and node.u.list:
+        entries = node.u.list.contents
+        if 0 <= entries.num <= 64 and entries.keys and entries.values:
+            for i in range(entries.num):
+                if entries.keys[i] == b"playlist_entry_id" and entries.values[i].format == 4:
+                    return entries.values[i].u.int64
+    return None
+
+
 _library = None
 _dll_directory = None
 _engines = set()
 _shutdown_connected = False
 _load_lock = threading.Lock()
+_destroy_executor = None
+_prefetch_thread = None
 
 
 def library_path():
@@ -63,12 +96,16 @@ def load_library():
 
 
 def prefetch_library():
+    global _prefetch_thread
+    if _prefetch_thread is not None:
+        return
     def prepare():
         try:
             load_library()
         except (OSError, MpvError, AttributeError) as exc:
             logging.warning("libmpv preload unavailable: %s", exc)
-    threading.Thread(target=prepare, name="libmpv-preload", daemon=True).start()
+    _prefetch_thread = threading.Thread(target=prepare, name="libmpv-preload", daemon=False)
+    _prefetch_thread.start()
 
 
 def _load_library():
@@ -110,10 +147,10 @@ def _load_library():
 def shutdown_all():
     for engine in list(_engines):
         engine.close()
-    deadline = time.monotonic() + 5
-    while _engines and time.monotonic() < deadline:
-        QApplication.processEvents()
-        time.sleep(.005)
+
+
+def pending_shutdowns():
+    return bool(_engines or (_prefetch_thread is not None and _prefetch_thread.is_alive()))
 
 
 class MpvClient(QObject):
@@ -126,12 +163,24 @@ class MpvClient(QObject):
         self.lib = load_library()
         self.handle = self.lib.mpv_create()
         self.closing = False
-        self._destroy_thread = None
+        self._destroy_future = None
+        self._destroy_done = threading.Event()
         self.values = {}
         self.logs = []
         self.active_entry = None
+        self.timer = QTimer(self)
+        self.timer.setInterval(20)
+        self.timer.timeout.connect(self.poll)
         if not self.handle:
             raise MpvError("无法创建 libmpv 播放器。")
+        # From the first owned native handle onward, failure must follow the
+        # same asynchronous cleanup path as a normal close. Registration and
+        # binding failures must not leak an untracked initialized player.
+        self.disposed.connect(self._finished)
+        _engines.add(self)
+        if not _shutdown_connected:
+            QApplication.instance().aboutToQuit.connect(shutdown_all)
+            _shutdown_connected = True
         options = {"profile": os.environ.get("CHRONOVIEW_MPV_PROFILE", "fast"),
                    "config": "no", "load-scripts": "no", "terminal": "no", "osc": "no",
                    "load-stats-overlay": "no", "load-console": "no", "load-select": "no",
@@ -159,30 +208,21 @@ class MpvClient(QObject):
                     continue
                 self.check(result)
             self.check(self.lib.mpv_initialize(self.handle))
+            for name, fmt in {"time-pos": 5, "duration": 5, "pause": 3, "eof-reached": 3,
+                              "seekable": 3, "video-params/w": 4, "video-params/h": 4,
+                              "estimated-vf-fps": 5, "hwdec-current": 1, "vo-configured": 3}.items():
+                self.check(self.lib.mpv_observe_property(self.handle, 0, name.encode(), fmt))
+            self.check(self.lib.mpv_request_log_messages(self.handle, b"warn"))
+            bindings = "\n".join(f"{key} script-message chronoview-{action}" for key, action in [
+                ("MBTN_LEFT", "click"), ("MBTN_LEFT_DBL", "double"), ("SPACE", "toggle"),
+                ("LEFT", "previous"), ("RIGHT", "next"), ("F11", "fullscreen"),
+                ("ESC", "escape"), ("Ctrl+l", "privacy")])
+            self.command("define-section", "chronoview", bindings, "force")
+            self.command("enable-section", "chronoview", "allow-hide-cursor")
         except Exception:
-            self.lib.mpv_terminate_destroy(self.handle)
-            self.handle = None
+            self.close()
             raise
-        for name, fmt in {"time-pos": 5, "duration": 5, "pause": 3, "eof-reached": 3,
-                          "seekable": 3, "video-params/w": 4, "video-params/h": 4,
-                          "estimated-vf-fps": 5, "hwdec-current": 1, "vo-configured": 3}.items():
-            self.check(self.lib.mpv_observe_property(self.handle, 0, name.encode(), fmt))
-        self.lib.mpv_request_log_messages(self.handle, b"warn")
-        bindings = "\n".join(f"{key} script-message chronoview-{action}" for key, action in [
-            ("MBTN_LEFT", "click"), ("MBTN_LEFT_DBL", "double"), ("SPACE", "toggle"),
-            ("LEFT", "previous"), ("RIGHT", "next"), ("F11", "fullscreen"),
-            ("ESC", "escape"), ("Ctrl+l", "privacy")])
-        self.command("define-section", "chronoview", bindings, "force")
-        self.command("enable-section", "chronoview", "allow-hide-cursor")
-        self.timer = QTimer(self)
-        self.timer.setInterval(20)
-        self.timer.timeout.connect(self.poll)
         self.timer.start()
-        self.disposed.connect(self._finished)
-        _engines.add(self)
-        if not _shutdown_connected:
-            QApplication.instance().aboutToQuit.connect(shutdown_all)
-            _shutdown_connected = True
 
     def check(self, result):
         if result < 0:
@@ -226,7 +266,9 @@ class MpvClient(QObject):
             if e.event_id == 0:
                 break
             kind, data = e.event_id, {"error": e.error, "token": e.userdata}
-            if kind == 22 and e.data:
+            if kind == 5 and e.data and e.error >= 0:
+                data["entry"] = command_entry(e.data)
+            elif kind == 22 and e.data:
                 p = C.cast(e.data, C.POINTER(Property)).contents
                 value = None
                 if p.data:
@@ -257,6 +299,7 @@ class MpvClient(QObject):
                 break
 
     def close(self):
+        global _destroy_executor
         if self.closing or not self.handle:
             return
         self.closing = True
@@ -266,10 +309,26 @@ class MpvClient(QObject):
         # pumping messages and never execute Python on a media worker callback.
         self.setParent(QApplication.instance())
         def destroy():
-            self.lib.mpv_terminate_destroy(handle)
+            try:
+                self.lib.mpv_terminate_destroy(handle)
+            finally:
+                # Never emit through a QObject from a native cleanup thread:
+                # Qt's application may already be exiting in a standalone probe.
+                self._destroy_done.set()
+        # Bound native teardown concurrency without blocking the GUI. Python
+        # joins the executor during normal interpreter shutdown.
+        if _destroy_executor is None:
+            _destroy_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="libmpv-cleanup")
+        self._destroy_future = _destroy_executor.submit(destroy)
+        self.cleanup_timer = QTimer(self)
+        self.cleanup_timer.setInterval(20)
+        self.cleanup_timer.timeout.connect(self._check_destroyed)
+        self.cleanup_timer.start()
+
+    def _check_destroyed(self):
+        if self._destroy_done.is_set() and self._destroy_future.done():
+            self.cleanup_timer.stop()
             self.disposed.emit()
-        self._destroy_thread = threading.Thread(target=destroy, name="libmpv-shutdown", daemon=False)
-        self._destroy_thread.start()
 
     def _finished(self):
         _engines.discard(self)

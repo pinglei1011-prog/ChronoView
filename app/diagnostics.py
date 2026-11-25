@@ -6,17 +6,19 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPointF, Qt, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
+from app import __display_version__, __version__
 from app.core.library import sort_items
 from app.services.thumbnail_service import cache_key
 from app.ui.photo_viewer import PhotoViewer
 
 
 class MediaVerification(QObject):
-    def __init__(self, window, report: Path):
+    def __init__(self, window, report: Path, clear_data=False):
         super().__init__(window)
         self.window, self.report = window, report
+        self.clear_data = clear_data
         QApplication.instance().setQuitOnLastWindowClosed(False)
         self.started = time.monotonic()
         self.stage, self.position = "privacy", 0
@@ -45,6 +47,29 @@ class MediaVerification(QObject):
                 self.report.parent.mkdir(parents=True, exist_ok=True)
                 window.grab().save(str(self.report.with_name(self.report.stem + "-privacy.png")))
                 self.steps.append("startup_main_privacy_before_loading")
+                self.startup_dark, self.startup_root = window.dark, window.root
+                window.settings_button.click()
+                self.stage = "settings"
+            elif self.stage == "settings":
+                dialog = window.settings_dialog
+                assert dialog is not None and dialog.isVisible()
+                assert dialog.version_label.text() == f"{__display_version__} 正式版"
+                assert not window.settings_button.icon().isNull()
+                assert not dialog.app_icon.pixmap().isNull()
+                assert dialog.remember_switch.isChecked() == window.remember_library
+                dialog.dark_button.click()
+                assert window.dark and dialog.dark
+                dialog.grab().save(str(self.report.with_name(self.report.stem + "-settings-dark.png")))
+                dialog.light_button.click()
+                assert not window.dark and not dialog.dark
+                dialog.grab().save(str(self.report.with_name(self.report.stem + "-settings-light.png")))
+                window.set_theme(self.startup_dark)
+                dialog.done_button.click()
+                assert not dialog.isVisible() and not window.settings_button.isChecked()
+                assert window.route == ("privacy",) and window.startup_pending
+                assert window.root == self.startup_root and window.scan is None
+                assert not window.grid.media_model.items
+                self.steps.append("settings_about_and_theme_without_library_access")
                 window.safe_page.resume.click()
                 self.stage = "scan"
             elif self.stage == "scan":
@@ -66,6 +91,7 @@ class MediaVerification(QObject):
                     if pixmap is None:
                         return
                     assert not pixmap.isNull()
+                    assert (window.thumbnails.cache / f"{cache_key(item)}.png").is_file()
                     if item.kind == "video":
                         assert window.thumbnails.duration(item) > 0
                 self.steps.append("real_covers_and_durations")
@@ -146,7 +172,32 @@ class MediaVerification(QObject):
                     assert window.route == ("all",)
                     assert len(window.grid.media_model.items) == len(self.items)
                     self.steps.append("in_app_privacy_and_resume")
-                    self.finish(True)
+                    if self.clear_data:
+                        window.show_privacy()
+                        window.show_settings()
+                        self.stage = "local_data"
+                    else:
+                        self.finish(True)
+            elif self.stage == "local_data":
+                if window.thumbnails._maintenance_task is not None:
+                    return
+                question = QMessageBox.question
+                try:
+                    QMessageBox.question = lambda *args: QMessageBox.StandardButton.Yes
+                    window.clear_local_data(True)
+                finally:
+                    QMessageBox.question = question
+                assert window._resetting_history
+                self.stage = "local_data_done"
+            elif self.stage == "local_data_done":
+                if window._resetting_history:
+                    return
+                assert not window.settings.contains("library") and not window.items
+                assert not window.grid.media_model.items and window.route == ("privacy",)
+                assert not window.settings_dialog.data_status.text().startswith("本地记录未能")
+                assert window.thumbnails.cache_info()['bytes'] == 0
+                self.steps.append("confirmed_local_history_and_cache_clear")
+                self.finish(True)
         except Exception as exc:
             self.finish(False, str(exc))
 
@@ -159,9 +210,17 @@ class MediaVerification(QObject):
         self.timer.stop()
         self.report.parent.mkdir(parents=True, exist_ok=True)
         self.report.write_text(json.dumps({"success": success, "steps": self.steps,
+            "version": __version__,
             "video_backend": self.viewer.video.backend_name if self.viewer else None,
             "error": error, "elapsed_seconds": round(time.monotonic() - self.started, 2)}, indent=2), encoding="utf-8")
         if self.viewer:
             self.viewer.close()
         self.window.close()
-        QTimer.singleShot(50, lambda: QApplication.instance().exit(0 if success else 1))
+        self._exit_code = 0 if success else 1
+        self._wait_for_close()
+
+    def _wait_for_close(self):
+        if not self.window._close_ready:
+            QTimer.singleShot(30, self._wait_for_close)
+            return
+        QApplication.instance().exit(self._exit_code)

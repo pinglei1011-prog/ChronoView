@@ -161,6 +161,9 @@ class MpvVideoPlayer(QtVideoPlayer):
         self._video_ready = False
         self._playback_started = False
         self._current_entry = None
+        self._expected_entry = None
+        self._pending_start_entry = None
+        self._pending_loaded = self._pending_restart = False
         self._want_autoplay = True
         super().__init__(parent)
         self.audio.volumeChanged.connect(lambda v: self.engine.set("volume", v * 100) if self.engine else None)
@@ -173,6 +176,9 @@ class MpvVideoPlayer(QtVideoPlayer):
         self._video_ready = False
         self._playback_started = False
         self._current_entry = None
+        self._expected_entry = None
+        self._pending_start_entry = None
+        self._pending_loaded = self._pending_restart = False
         self._want_autoplay = bool(autoplay)
         self._set_status("正在打开视频…")
         self.position_slider.setRange(0, 0)
@@ -208,7 +214,7 @@ class MpvVideoPlayer(QtVideoPlayer):
         return self._video_ready
 
     def toggle(self):
-        if not self.player:
+        if not self.player or self.failed:
             return
         # Property notifications arrive asynchronously. Use the requested
         # state so rapid clicks/double-click restoration cannot toggle a stale
@@ -232,11 +238,23 @@ class MpvVideoPlayer(QtVideoPlayer):
     def on_event(self, kind, data):
         if not self.player or not self.engine:
             return
-        if kind == 5 and data["error"] < 0 and data["token"] == self.generation:
-            self.fail("无法打开视频：" + self.engine.lib.mpv_error_string(data["error"]).decode())
+        if kind == 5:
+            if data["token"] != self.generation:
+                return
+            if data["error"] < 0:
+                self.fail("无法打开视频：" + self.engine.lib.mpv_error_string(data["error"]).decode())
+            elif data.get("entry") is not None:
+                # loadfile returns its new playlist ID before opening completes.
+                # Never claim an old START_FILE just because it is still the
+                # current playlist item while our command is pending.
+                self._expected_entry = data["entry"]
+                if self._pending_start_entry == self._expected_entry:
+                    self._accept_entry()
         elif kind == 6:
-            if data["entry"] == self.engine.get_number("playlist/0/id"):
-                self._current_entry = data["entry"]
+            self._pending_start_entry = data["entry"]
+            self._pending_loaded = self._pending_restart = False
+            if self._pending_start_entry == self._expected_entry:
+                self._accept_entry()
         elif kind == 7 and data.get("reason") == 4 and data.get("entry") == self._current_entry:
             self.fail("无法播放视频。文件可能损坏、编码不受支持，或硬盘已断开。")
         elif kind == 8 and self._current_entry is not None:
@@ -254,6 +272,11 @@ class MpvVideoPlayer(QtVideoPlayer):
                 if self._want_autoplay:
                     self.engine.set("pause", False)
         elif kind == 22:
+            # Properties observed before the acknowledged file has started can
+            # belong to the retired file (notably EOF). They must not cancel
+            # the new file's autoplay intent or advertise stale duration/state.
+            if self._current_entry is None:
+                return
             name, value = data["name"], data["value"]
             if name in ("pause", "time-pos"):
                 self.update_state()
@@ -297,6 +320,30 @@ class MpvVideoPlayer(QtVideoPlayer):
                 self.escape_requested.emit()
             elif action == "privacy":
                 self.privacy_requested.emit()
+        if self._current_entry is None and self._pending_start_entry is not None:
+            # Be tolerant of native reply/event ordering, without replaying
+            # readiness from any entry other than the acknowledged target.
+            if kind == 8:
+                self._pending_loaded = True
+            elif kind == 21:
+                self._pending_restart = True
+
+    def _accept_entry(self):
+        self._current_entry = self._expected_entry
+        self.engine.values["eof-reached"] = False
+        loaded, restart = self._pending_loaded, self._pending_restart
+        self._pending_loaded = self._pending_restart = False
+        if loaded:
+            self.on_event(8, {})
+        if restart:
+            self.on_event(21, {})
+
+    def fail(self, message):
+        # load() retires the facade before validating the next path. Without
+        # this stop/mute fence, a missing next file leaves the previous native
+        # video playing with no facade for QtVideoPlayer.fail() to stop.
+        self.release()
+        super().fail(message)
 
     def release(self, stop=True):
         self.generation += 1
@@ -304,8 +351,16 @@ class MpvVideoPlayer(QtVideoPlayer):
         self.surface.reset_click_state()
         old, self.player = self.player, None
         self._video_ready = False
+        self._playback_started = False
+        self._want_autoplay = False
+        self._current_entry = self._expected_entry = self._pending_start_entry = None
+        self._pending_loaded = self._pending_restart = False
         if self.engine and stop:
-            self.engine.command("stop")
+            try:
+                self.engine.set("mute", True)
+                self.engine.command("stop")
+            except MpvError:
+                logging.warning("播放器停止命令未完成，继续异步释放")
         if old:
             old.deleteLater()
 

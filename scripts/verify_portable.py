@@ -7,6 +7,7 @@ import argparse
 import subprocess
 import sys
 import tempfile
+import hashlib
 from pathlib import Path
 
 from PIL import Image
@@ -41,7 +42,6 @@ env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
 app = QCoreApplication([])
 app.setOrganizationName("ChronoView")
 app.setApplicationName("ChronoView")
-cache = Path(QStandardPaths.writableLocation(QStandardPaths.CacheLocation)) / "thumbnails"
 with tempfile.TemporaryDirectory(prefix="packaged-smoke-", dir=cwd) as temp:
     test_dir = Path(temp)
     library = test_dir / "相册 & [素材]" / "错误年份 2025"
@@ -52,16 +52,23 @@ with tempfile.TemporaryDirectory(prefix="packaged-smoke-", dir=cwd) as temp:
     make_video(library / "VID20260201003000.mov", "hevc")
     make_video(library / "VID20260301003000.mkv")
     entries = scan_library(library.parent).items
+    hashes = {item.path: hashlib.sha256(item.path.read_bytes()).digest() for item in entries}
+    unrelated = test_dir / 'library.sqlite3.corrupt-original.jpg'
+    unrelated.write_bytes(b'User file outside the indexed library and backup allowlist')
     settings_path = test_dir / "packaged-smoke.ini"
+    cache = settings_path.parent / "cache" / "thumbnails"
     report_path = root / "work" / f"packaged-{__version__}-media.json"
     result = subprocess.run([str(exe), "--library", str(library.parent), "--settings-file", str(settings_path),
                              "--verify-media", str(report_path)], cwd=cwd, env=env, timeout=60)
     assert result.returncode == 0, f"Packaged app exit code: {result.returncode}"
+    assert all(hashlib.sha256(path.read_bytes()).digest() == digest for path, digest in hashes.items())
     import json
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["success"], report
     assert report["video_backend"] == ("libmpv" if args.backend == "mpv" else "qt"), report
     assert "startup_main_privacy_before_loading" in report["steps"], report
+    assert "settings_about_and_theme_without_library_access" in report["steps"], report
+    assert report["version"] == __version__, report
     assert all(f"autoplay_ignores_opening_release_video_{i}" in report["steps"] for i in range(3)), report
     settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
     assert settings.value("library") == str(library.parent), "Packaged app did not finish scanning the library"
@@ -74,16 +81,20 @@ with tempfile.TemporaryDirectory(prefix="packaged-smoke-", dir=cwd) as temp:
             Image.new("RGB", (110, 70), "blue").save(item.path)
         os.utime(item.path, ns=(item.mtime_ns + 2_000_000_000, item.mtime_ns + 2_000_000_000))
     stale_report = root / "work" / f"packaged-{__version__}-stale-index.json"
-    result = subprocess.run([str(exe), "--settings-file", str(settings_path),
+    hashes = {item.path: hashlib.sha256(item.path.read_bytes()).digest() for item in entries}
+    result = subprocess.run([str(exe), "--settings-file", str(settings_path), "--verify-local-data",
                              "--verify-media", str(stale_report)], cwd=cwd, env=env, timeout=60)
     assert result.returncode == 0, f"Stale-index regression exit code: {result.returncode}"
+    assert all(hashlib.sha256(path.read_bytes()).digest() == digest for path, digest in hashes.items())
     report = json.loads(stale_report.read_text(encoding="utf-8"))
     assert report["success"], report
     assert "startup_main_privacy_before_loading" in report["steps"], report
     assert all(f"autoplay_ignores_opening_release_video_{i}" in report["steps"] for i in range(3)), report
-    current_entries = scan_library(library.parent).items
-    for item in current_entries:
-        assert (cache / f"{cache_key(item)}.png").is_file(), "Changed files must use current cache fingerprints"
+    assert 'confirmed_local_history_and_cache_clear' in report['steps']
+    assert not list(cache.glob('*.png'))
+    settings.sync()
+    assert not settings.contains('library')
+    assert unrelated.read_bytes() == b'User file outside the indexed library and backup allowlist'
 print("PASS: Packaged H.264 MP4 / H.265 MOV / H.264 MKV covers, playback, pause, seek, volume, fullscreen; photo decoding and year/month navigation. Unicode cwd, stripped PATH.")
 print("PASS: Changed photos/videos remain readable after restoring a stale SQLite index, without manual refresh.")
 print("PASS: MP4/MOV/MKV autoplay keeps playing after the opening gesture's stray mouse release.")

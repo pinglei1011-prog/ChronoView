@@ -149,16 +149,12 @@ def stylesheet(dark: bool = False) -> str:
     }}
     QFrame#libraryCard {{
         background: {t['surface']};
-        border: 1px solid {t['border']};
+        border: none;
         border-radius: 12px;
     }}
     QLabel#libraryPath {{
         color: {t['text_secondary']};
         font-size: 11.5px;
-    }}
-    QLabel#sidebarFooter {{
-        color: {t['muted']};
-        font-size: 11px;
     }}
 
     /* Typography */
@@ -312,6 +308,126 @@ def stylesheet(dark: bool = False) -> str:
     QPushButton#ghostButton:hover {{
         background: {t['hover']};
         color: {t['text']};
+    }}
+    QPushButton#settingsNavigation {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        padding: 8px 12px;
+        text-align: left;
+        font-size: 13px;
+        font-weight: 500;
+        color: {t['text_secondary']};
+    }}
+    QPushButton#settingsNavigation:hover {{
+        background: {t['hover']};
+        color: {t['text']};
+    }}
+    QPushButton#settingsNavigation:checked {{
+        background: {t['selection']};
+        color: {t['accent']};
+    }}
+    QPushButton#settingsNavigation:focus {{
+        border-color: {t['accent_border']};
+    }}
+
+    /* Settings sheet: soft surfaces and spacing, without separator lines. */
+    QScrollArea#settingsScroll, QWidget#settingsBody, QWidget#settingsViewport {{
+        background: transparent;
+        border: none;
+    }}
+    QLabel#settingsHeading {{
+        font-size: 25px;
+        font-weight: 700;
+        color: {t['text']};
+    }}
+    QLabel#settingsSection {{
+        color: {t['text_secondary']};
+        font-size: 12px;
+        font-weight: 500;
+        padding-left: 3px;
+    }}
+    QFrame#settingsCard {{
+        background: {t['surface']};
+        border: none;
+        border-radius: 18px;
+    }}
+    QFrame#settingsSegments {{
+        background: {t['surface_subtle']};
+        border: none;
+        border-radius: 9px;
+    }}
+    QPushButton#settingsSegment {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        padding: 5px 11px;
+        font-size: 12px;
+        color: {t['text_secondary']};
+    }}
+    QPushButton#settingsSegment:hover {{
+        color: {t['text']};
+    }}
+    QPushButton#settingsSegment:checked {{
+        background: {t['surface']};
+        font-weight: 600;
+        color: {t['text']};
+    }}
+    QPushButton#settingsSegment:focus {{
+        border-color: {t['accent_border']};
+    }}
+    QLabel#settingsAppName {{
+        font-size: 24px;
+        font-weight: 700;
+        color: {t['text']};
+    }}
+    QLabel#settingsVersion {{
+        font-size: 12px;
+        color: {t['muted']};
+    }}
+    QLabel#settingsTagline {{
+        font-size: 13px;
+        color: {t['text_secondary']};
+    }}
+    QLabel#settingsPrivacy {{
+        font-size: 12px;
+        line-height: 1.5;
+        color: {t['text_secondary']};
+    }}
+    QPushButton#settingsLink {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        padding: 0;
+    }}
+    QPushButton#settingsLink:hover {{
+        background: {t['surface_hover']};
+    }}
+    QPushButton#settingsLink:pressed {{
+        background: {t['hover']};
+    }}
+    QPushButton#settingsLink:focus {{
+        border-color: {t['accent_border']};
+    }}
+    QLabel#settingsLinkText {{
+        color: {t['text']};
+        font-size: 13px;
+        background: transparent;
+    }}
+    QPushButton#settingsLicense {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: {t['text_secondary']};
+        font-size: 11px;
+        padding: 3px 9px;
+    }}
+    QPushButton#settingsLicense:hover {{
+        background: {t['surface_hover']};
+        color: {t['accent']};
+    }}
+    QPushButton#settingsLicense:focus {{
+        border-color: {t['accent_border']};
     }}
     QPushButton#cardAction {{
         background: transparent;

@@ -22,8 +22,12 @@ from app.ui.album_grid import AlbumGrid
 from app.ui.calendar_tree import CalendarTree
 from app.ui.photo_grid import PhotoGrid
 from app.ui.photo_viewer import PhotoViewer
+from app.ui.privacy_preview import set_private_preview, handle_private_preview
 from app.ui.privacy_page import InAppPrivacyPage
+from app.ui.settings_dialog import SettingsDialog
 from app.ui.theme import apply_window_chrome, asset_path, stylesheet, tinted_icon, tinted_pixmap, tokens
+
+_closing_windows = set()
 
 
 class ScanThread(QThread):
@@ -47,9 +51,17 @@ class ScanThread(QThread):
     def run(self):
         try:
             index = LibraryIndex(self.index_path) if self.index_path else None
+            index_warning = ""
+            try:
+                generation = index.generation() if index else None
+            except Exception:
+                logging.exception("本地索引不可用，继续只读扫描")
+                index = None
+                generation = None
+                index_warning = "本地索引不可写，本次仍可浏览，下次需重新扫描。"
             if index and self.prefer_index:
                 try:
-                    cached = index.load(self.root)
+                    cached = index.load(self.root, cancel=self.cancel)
                 except Exception:
                     logging.exception("Cannot restore library index; scanning instead")
                     cached = None
@@ -59,15 +71,20 @@ class ScanThread(QThread):
                     except OSError:
                         offline = True
                     self.result_ready.emit(ScanResult(items=cached, from_index=True, offline=offline,
+                                                      library_identity=index.loaded_identity,
                                                       cancelled=self.cancel.is_set()))
                     return
             result = scan_library(self.root, self.cancel, self.report, self.batch_ready.emit)
-            if index and not (result.cancelled or result.unavailable or result.error_count):
+            result.index_warning = index_warning
+            if index and not (result.cancelled or result.unavailable or result.error_count or result.identity_changed):
                 try:
-                    index.save(self.root, result.items)
+                    index.save(self.root, result.items, expected_identity=result.library_identity,
+                               expected_generation=generation, cancel=self.cancel)
                 except Exception as exc:
                     logging.exception("Cannot save library index")
                     result.index_warning = f"本地索引保存失败，下次启动将重新扫描：{exc}"
+            if index and index.warning:
+                result.index_warning = index.warning
         except Exception as exc:
             logging.exception("Scan failed")
             result = ScanResult(unavailable=True, errors=[str(exc)], error_count=1)
@@ -100,22 +117,41 @@ class MainWindow(QMainWindow):
         self.scan_result = None
         self.scan_root = None
         self.snapshot = []
+        self.library_identity = None
+        self.snapshot_identity = None
+        self.snapshot_root = None
         self.dirty = False
+        self.settings_dialog = None
+        self._cached_viewer = None
+        self._closing = False
+        self._close_ready = False
+        self._maintenance = None
+        self._resetting_history = False
+        self._cache_clearing = False
+        self._data_error = ""
+        self._view_key = None
+        self._summary_key = None
         self.dark = self.settings.value("dark", False, type=bool)
         self.sidebar_visible = self.settings.value("sidebar_visible", True, type=bool)
         self.crop_thumbnails = self.settings.value("thumbnail_crop", False, type=bool)
         self.setWindowTitle("ChronoView · 我的照片")
         self.resize(1280, 850)
         self.setMinimumSize(880, 580)
-        cache = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation))
+        cache = (data_path / "cache" if self.settings.format() == QSettings.Format.IniFormat else
+                 Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)))
         self.thumbnails = ThumbnailService(cache / "thumbnails", self)
         self.build_ui()
+        self.thumbnails.cache_cleared.connect(self._cache_cleared)
+        self.thumbnails.cache_info_ready.connect(self._cache_info_ready)
         self.apply_theme()
         self.rebuild_navigation()
         self.update_view()
         self.preview_timer = QTimer(self)
         self.preview_timer.setInterval(400)
         self.preview_timer.timeout.connect(self.preview_scan)
+        self.close_timer = QTimer(self)
+        self.close_timer.setInterval(50)
+        self.close_timer.timeout.connect(self._poll_close)
         QShortcut(QKeySequence("F5"), self, activated=self.refresh)
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_folder)
         QShortcut(QKeySequence("Ctrl+B"), self, activated=self.toggle_sidebar)
@@ -212,19 +248,16 @@ class MainWindow(QMainWindow):
 
         side.addWidget(library_card)
 
-        footer_row = QHBoxLayout()
-        footer_row.setContentsMargins(4, 2, 2, 0)
-        footer_row.setSpacing(4)
-        footer = QLabel(f"{__display_version__} · 本地只读")
-        footer.setObjectName("sidebarFooter")
-        footer_row.addWidget(footer, 1)
-        self.about_button = QPushButton("关于")
-        self.about_button.setObjectName("ghostButton")
-        self.about_button.setToolTip("关于与许可证")
-        self.about_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.about_button.clicked.connect(self.show_about)
-        footer_row.addWidget(self.about_button)
-        side.addLayout(footer_row)
+        self.settings_button = QPushButton("设置")
+        self.settings_button.setObjectName("settingsNavigation")
+        self.settings_button.setIconSize(QSize(18, 18))
+        self.settings_button.setMinimumHeight(40)
+        self.settings_button.setCheckable(True)
+        self.settings_button.setAccessibleName("设置")
+        self.settings_button.setToolTip("外观、隐私偏好与关于 ChronoView")
+        self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_button.clicked.connect(self.show_settings)
+        side.addWidget(self.settings_button)
 
         outer.addWidget(sidebar)
 
@@ -438,6 +471,12 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         apply_window_chrome(self, self.dark)
+        set_private_preview(self, self.route == ("privacy",))
+
+    def nativeEvent(self, event_type, message):
+        if self.route == ("privacy",) and handle_private_preview(self, message):
+            return True, 0
+        return super().nativeEvent(event_type, message)
 
     def sidebar_button(self, label, icon):
         button = QToolButton()
@@ -485,6 +524,8 @@ class MainWindow(QMainWindow):
         self.safe_page.resume.setFocus()
 
     def resume_browsing(self):
+        if self._closing or self._resetting_history:
+            return
         if self.route != ("privacy",):
             return
         if self.startup_pending:
@@ -521,6 +562,7 @@ class MainWindow(QMainWindow):
         self.back_button.setIcon(tinted_icon("back.svg", t["text_secondary"], 16))
         self.choose_button.setIcon(tinted_icon("folder.svg", "#ffffff", 15))
         self.refresh_button.setIcon(tinted_icon("refresh.svg", t["text_secondary"], 14))
+        self.settings_button.setIcon(tinted_icon("settings.svg", t["text_secondary"], 18))
         theme_icon = "sun.svg" if self.dark else "moon.svg"
         self.theme_button.setIcon(tinted_icon(theme_icon, t["text_secondary"], 15))
         self.fit_button.setIcon(tinted_icon("fit-contain.svg", t["text"] if not self.crop_thumbnails else t["muted"], 14))
@@ -534,6 +576,8 @@ class MainWindow(QMainWindow):
         self.albums.delegate.dark = self.dark
         self.navigation.delegate.dark = self.dark
         self.safe_page.apply_theme(self.dark)
+        if self.settings_dialog is not None:
+            self.settings_dialog.sync_preferences(self.dark, self.remember_library)
         self.theme_button.setText("浅色" if self.dark else "深色")
         self.theme_button.setToolTip("切换到浅色外观" if self.dark else "切换到深色外观")
         self._update_themed_icons()
@@ -545,11 +589,110 @@ class MainWindow(QMainWindow):
         self.grid.set_thumbnail_size(edge)
         self.albums.set_thumbnail_size(edge)
 
+    def show_settings(self):
+        if self.settings_dialog is None:
+            dialog = SettingsDialog(self.dark, self.remember_library, self)
+            self.settings_dialog = dialog
+            dialog.theme_requested.connect(self.set_theme)
+            dialog.remember_requested.connect(self.remember_checkbox.setChecked)
+            dialog.licenses_requested.connect(lambda: self.show_licenses(dialog))
+            dialog.privacy_requested.connect(self.show_privacy)
+            dialog.cache_clear_requested.connect(lambda: self.clear_local_data(False))
+            dialog.history_clear_requested.connect(lambda: self.clear_local_data(True))
+            dialog.finished.connect(lambda: self.settings_button.setChecked(False))
+        self.settings_dialog.sync_preferences(self.dark, self.remember_library)
+        self.thumbnails.request_cache_info()
+        self.settings_button.setChecked(True)
+        if self.settings_dialog.isVisible():
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+        else:
+            self.settings_dialog.open()
+
+    def _cache_info_ready(self, info):
+        if self.settings_dialog is not None and not self._cache_clearing:
+            used = info.get("bytes", info.get("size", 0)) / 1024**3
+            self.settings_dialog.data_status.setText(f"缩略图缓存 {used:.2f} GB / 5 GB")
+
+    def clear_local_data(self, history=False):
+        if self._closing or self._cache_clearing or self._maintenance is not None:
+            return
+        text = ("将清除所有照片库索引、上次使用的目录、软件日志和缩略图缓存，保留外观偏好。\n"
+                "请先关闭其他运行中的 ChronoView 实例，避免其重新保存记录。\n\n"
+                if history else "将清除软件生成的照片缩略图、视频封面和时长缓存。浏览时会重新生成。\n\n")
+        answer = QMessageBox.question(self.settings_dialog, "清除本地数据", text +
+                                      "原始照片和视频不会被修改、移动或删除。是否继续？",
+                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                      QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._data_error = ""
+        if not self.thumbnails.clear_cache():
+            self.settings_dialog.data_status.setText("缓存正在维护，请稍后重试")
+            return
+        self._cache_clearing = True
+        self.settings_dialog.cache_button.setEnabled(False)
+        self.settings_dialog.history_button.setEnabled(False)
+        self.settings_dialog.data_status.setText("正在清理本地数据…")
+        if history:
+            self._resetting_history = True
+            self.show_privacy()
+            if self._cached_viewer is not None:
+                self._cached_viewer.dispose()
+            if self.scan:
+                self.scan.cancel.set()
+            self.items = []
+            self.snapshot = []
+            self.root = self.pending_library = None
+            self.library_identity = self.snapshot_identity = self.snapshot_root = None
+            self.startup_pending = True
+            self.settings.remove("library")
+            self.settings.sync()
+            self._view_key = self._summary_key = None
+            self.update_view()
+            self.safe_page.resume.setEnabled(False)
+            self.choose_button.setEnabled(False)
+            from app.services.local_data import ClearLocalData
+            self._maintenance = ClearLocalData(self.index_path, self)
+            self._maintenance.completed.connect(lambda error: setattr(self, "_data_error", error))
+            self._maintenance.finished.connect(self._records_cleared)
+            self._maintenance.start()
+
+    def _records_cleared(self):
+        job, self._maintenance = self._maintenance, None
+        job.deleteLater()
+        self._finish_data_clear()
+
+    def _cache_cleared(self, success, message):
+        self._cache_clearing = False
+        if not success:
+            self._data_error = message
+        self._finish_data_clear()
+
+    def _finish_data_clear(self):
+        if self._cache_clearing or self._maintenance is not None:
+            return
+        if self.scan is not None:
+            QTimer.singleShot(50, self._finish_data_clear)
+            return
+        self._resetting_history = False
+        if self.settings_dialog is not None:
+            self.settings_dialog.data_status.setText(self._data_error or "本地数据已清理")
+            self.settings_dialog.cache_button.setEnabled(True)
+            self.settings_dialog.history_button.setEnabled(True)
+        self._data_error = ""
+        if not self._closing:
+            self.choose_button.setEnabled(True)
+            self.safe_page.resume.setEnabled(True)
+
     def show_about(self):
+        self.show_settings()
+
+    def show_licenses(self, parent=None):
         import os
         video_notice = ("视频播放：libmpv 0.42.0（固定源码 LGPL 构建）。\n"
                         if os.environ.get("CHRONOVIEW_VIDEO_BACKEND") == "mpv" else "")
-        QMessageBox.about(self, "关于 ChronoView", f"ChronoView {__display_version__} · 本地照片与视频\n\n"
+        QMessageBox.about(parent or self, "开源许可", f"ChronoView {__display_version__} · 本地照片与视频\n\n"
                           + video_notice +
                           "使用 Qt / PySide6 6.10.3（LGPLv3）和 FFmpeg 7.1.3（LGPLv2.1+）动态库。\n"
                           "This software uses libraries from the FFmpeg project under the LGPLv2.1 or later.\n\n"
@@ -557,7 +700,10 @@ class MainWindow(QMainWindow):
                           "原始照片和视频只读访问。")
 
     def toggle_theme(self):
-        self.dark = not self.dark
+        self.set_theme(not self.dark)
+
+    def set_theme(self, dark):
+        self.dark = bool(dark)
         self.settings.setValue("dark", self.dark)
         self.apply_theme()
 
@@ -589,7 +735,11 @@ class MainWindow(QMainWindow):
             return
         collection = self.add_nav(self.navigation, "全部照片", ("all",))
         collection.setExpanded(("all",) in expanded or ("all",) not in known)
-        counts = calendar_counts(self.items)
+        summary_key = (id(self.items), len(self.items))
+        if summary_key != self._summary_key:
+            self._calendar_counts = calendar_counts(self.items)
+            self._summary_key = summary_key
+        counts = self._calendar_counts
         all_years = sorted({year for year, month in counts})
         for year in all_years:
             count = sum(n for (y, m), n in counts.items() if y == year)
@@ -646,6 +796,7 @@ class MainWindow(QMainWindow):
     def update_view(self):
         route = self.route
         hidden = route == ("privacy",)
+        set_private_preview(self, hidden)
         for button in (self.privacy_button, self.privacy_action):
             button.setChecked(hidden)
         self._update_themed_icons()
@@ -653,6 +804,8 @@ class MainWindow(QMainWindow):
             widget.setVisible(not hidden)
         self.statusBar().setVisible(not hidden)
         if hidden:
+            self._view_key = None
+            self._summary_key = None
             self.thumbnails.set_paused(True)
             self.setWindowTitle("ChronoView · 隐私页")
             self.heading.setText("隐私页")
@@ -692,7 +845,10 @@ class MainWindow(QMainWindow):
         else:
             visible = self.items
             heading = "全部照片"
-        self.visible_items = sort_items(visible, self.sort_box.currentIndex() == 0)
+        view_key = (id(self.items), len(self.items), route, self.sort_box.currentIndex())
+        if self._view_key != view_key:
+            self.visible_items = sort_items(visible, self.sort_box.currentIndex() == 0)
+            self._view_key = view_key
         self.heading.setText(heading)
         photos = sum(item.kind == "image" for item in visible)
         videos = len(visible) - photos
@@ -738,11 +894,13 @@ class MainWindow(QMainWindow):
         elif self.root and not self.scan:
             self.settings.setValue("library", str(self.root))
         self.settings.sync()
+        if self.settings_dialog is not None:
+            self.settings_dialog.sync_preferences(self.dark, self.remember_library)
         if self.route == ("privacy",):
             self.update_view()
 
     def open_previous_library(self):
-        if not self.startup_pending:
+        if not self.startup_pending or self._closing or self._resetting_history:
             return
         target = self.pending_library or self.root
         if target:
@@ -755,7 +913,7 @@ class MainWindow(QMainWindow):
                 self.navigation.blockSignals(previous)
 
     def choose_folder(self):
-        if self.scan:
+        if self.scan or self._closing or self._resetting_history:
             return
         initial = Path.home() if self.route == ("privacy",) else self.root or Path.home()
         folder = QFileDialog.getExistingDirectory(self, "选择照片库最外层文件夹", str(initial))
@@ -763,7 +921,7 @@ class MainWindow(QMainWindow):
             self.start_scan(Path(folder))
 
     def refresh(self):
-        if self.route == ("privacy",):
+        if self.route == ("privacy",) or self._closing or self._resetting_history:
             return
         if not self.scan:
             self.start_scan(self.root) if self.root else self.choose_folder()
@@ -777,7 +935,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(busy)
 
     def start_scan(self, root: Path, prefer_index=False):
-        if self.scan:
+        if self.scan or self._closing or self._resetting_history:
             return
         self.startup_pending = False
         self.pending_library = None
@@ -785,6 +943,8 @@ class MainWindow(QMainWindow):
         self.statusBar().show()
         self.snapshot = self.items
         self.snapshot_route = self.route
+        self.snapshot_identity = self.library_identity
+        self.snapshot_root = self.root
         self.items = []
         self.scan_root = root.absolute()
         if self.root != self.scan_root or self.route == ("privacy",):
@@ -806,6 +966,8 @@ class MainWindow(QMainWindow):
         self.scan.start()
 
     def receive_batch(self, batch):
+        if self._closing:
+            return
         self.items.extend(batch)
         self.dirty = True
 
@@ -819,26 +981,56 @@ class MainWindow(QMainWindow):
         self.scan_result = result
 
     def finish_scan(self):
+        if self._closing or self._resetting_history:
+            thread, self.scan = self.scan, None
+            if thread:
+                thread.deleteLater()
+            self.snapshot = []
+            self.snapshot_identity = None
+            self.snapshot_root = None
+            self.scan_result = None
+            return
         was_private = self.route == ("privacy",)
         self.preview_timer.stop()
         result = self.scan_result
         if result is None:
             result = ScanResult(unavailable=True, errors=["扫描线程未返回结果"], error_count=1)
+        identity_conflict = (result.identity_changed or
+                             (self.snapshot_root == self.scan_root and self.snapshot_identity is not None
+                              and result.library_identity is not None
+                              and self.snapshot_identity != result.library_identity))
+        if (self.snapshot_root == self.scan_root and self.snapshot_identity is not None
+                and result.library_identity is None and not result.offline):
+            identity_conflict = True
+        merged_snapshot = False
         if result.cancelled or result.unavailable:
-            self.items = self.snapshot
-            self.route = self.snapshot_route
-            message = ("扫描已取消，已恢复扫描前的照片库。" if result.cancelled else
-                       "照片库不可访问。请连接移动硬盘，或点击“选择文件夹”重新定位。已保留本次会话中的原有列表。")
+            if identity_conflict:
+                self.items = []
+                self.route = ("all",)
+                self.root = self.scan_root
+                self.library_identity = None
+                message = "硬盘身份发生变化，已停止显示此前照片库的记录，请重新选择照片库或刷新。"
+            else:
+                self.items = self.snapshot
+                self.root = self.snapshot_root
+                self.library_identity = self.snapshot_identity
+                self.route = self.snapshot_route
+                message = ("扫描已取消，已恢复扫描前的照片库。" if result.cancelled else
+                           "照片库不可访问。请连接移动硬盘，或点击“选择文件夹”重新定位。已保留本次会话中的原有列表。")
             self.banner.setText(message)
             self.banner.show()
         else:
             self.items = result.items
             self.thumbnails.clear_errors()
-            if result.error_count and self.root == self.scan_root:
+            if (result.error_count and self.snapshot_root == self.scan_root
+                    and self.snapshot_identity is not None
+                    and self.snapshot_identity == result.library_identity and not identity_conflict):
                 # A partial traversal cannot prove that unseen files were deleted.
                 seen = {item.path for item in self.items}
                 self.items.extend(item for item in self.snapshot if item.path not in seen)
+                merged_snapshot = True
             self.root = self.scan_root
+            self.library_identity = result.library_identity
             if self.remember_library:
                 self.settings.setValue("library", str(self.root))
             else:
@@ -854,7 +1046,8 @@ class MainWindow(QMainWindow):
                 self.banner.show()
             if result.error_count:
                 message += f" · {result.error_count} 处无法访问（见提示）"
-                self.banner.setText(f"有 {result.error_count} 处无法访问，已跳过；原有未读到的条目已保留。\n" +
+                preservation = "该硬盘原有未读到的条目已保留。" if merged_snapshot else "无法确认同一照片库，未合并旧记录。"
+                self.banner.setText(f"有 {result.error_count} 处无法访问，已跳过；{preservation}\n" +
                                     "\n".join(result.errors[:3]))
                 self.banner.show()
                 logging.warning("Partial scan: %s", result.errors)
@@ -862,6 +1055,8 @@ class MainWindow(QMainWindow):
         self.scan = None
         thread.deleteLater()
         self.snapshot = []
+        self.snapshot_identity = None
+        self.snapshot_root = None
         if self.route == ("unknown",) and not any(item.taken_at is None for item in self.items):
             self.route = ("all",)
         self.path_label.setText(str(self.root) if self.root else "尚未选择照片库")
@@ -887,22 +1082,72 @@ class MainWindow(QMainWindow):
         self.viewer_open = True
         self.thumbnails.set_paused(True)
         try:
-            viewer = PhotoViewer(self.grid.media_model.items, index.row(), self)
+            viewer = self._cached_viewer
+            if viewer is None:
+                viewer = PhotoViewer(self.grid.media_model.items, index.row(), self)
+                if hasattr(viewer, "reopen"):
+                    viewer.retain_video_engine = True
+                    self._cached_viewer = viewer
+            else:
+                viewer.retain_video_engine = True
+                viewer.reopen(self.grid.media_model.items, index.row())
             self.active_viewer = viewer
             viewer.exec()
-            viewer.deleteLater()
+            if viewer is not self._cached_viewer:
+                viewer.deleteLater()
         finally:
             self.active_viewer = None
             self.viewer_open = False
             self.thumbnails.set_paused(self.route == ("privacy",))
 
     def closeEvent(self, event):
+        if self._close_ready:
+            self.settings.setValue("thumbnail_size", self.size_slider.value())
+            self.settings.setValue("thumbnail_crop", self.crop_thumbnails)
+            self.settings.sync()
+            super().closeEvent(event)
+            _closing_windows.discard(self)
+            return
+        from app.ui.photo_viewer import cancel_pending_decodes
+        from app.services.mpv_client import shutdown_all
+        if self._closing:
+            event.ignore()
+            return
+        self._closing = True
+        self._close_started = time.monotonic()
+        _closing_windows.add(self)
         self.preview_timer.stop()
+        if self.settings_dialog is not None:
+            self.settings_dialog.close()
         if self.scan:
             self.scan.cancel.set()
-            self.scan.wait()
+        self.show_privacy()
+        if self._cached_viewer is not None:
+            self._cached_viewer.dispose()
+        cancel_pending_decodes()
+        shutdown_all()
         self.thumbnails.shutdown()
-        self.settings.setValue("thumbnail_size", self.size_slider.value())
-        self.settings.setValue("thumbnail_crop", self.crop_thumbnails)
-        self.settings.sync()
-        super().closeEvent(event)
+        self.safe_page.title.setText("正在安全关闭")
+        self.safe_page.hint.setText("正在结束后台任务，请稍候")
+        self.safe_page.resume.setEnabled(False)
+        self.settings_button.setEnabled(False)
+        self.navigation.setEnabled(False)
+        self.set_busy(True)
+        self.close_timer.start()
+        event.ignore()
+        self._poll_close()
+
+    def _poll_close(self):
+        from app.ui.photo_viewer import has_pending_decodes
+        from app.services.mpv_client import pending_shutdowns
+        if time.monotonic() - self._close_started > 5:
+            self.safe_page.hint.setText("设备读取尚未返回，已请求取消。\n窗口仍可响应，请检查硬盘连接。")
+        if self.scan is not None or has_pending_decodes() or pending_shutdowns() or not self.thumbnails.is_idle():
+            return
+        if self._maintenance is not None and self._maintenance.isRunning():
+            return
+        self.close_timer.stop()
+        self._close_ready = True
+        # QWidget ignores recursive close() from inside the first closeEvent.
+        # Defer even an already-idle close until that event has unwound.
+        QTimer.singleShot(0, self.close)

@@ -31,9 +31,10 @@ def test_index_restore_without_scanning_and_offline(tmp_path, qapp, monkeypatch)
     entries = scan_library(root).items
     index.save(root, entries)
     # Simulate a disconnected root while retaining its index snapshot.
-    offline_root = tmp_path / "not connected"
-    index.save(offline_root, entries)
-    settings.setValue("library", str(offline_root))
+    # Use the actual same library identity; never save another root's absolute
+    # paths as an offline alias, which would itself be a cross-library leak.
+    original_is_dir = Path.is_dir
+    monkeypatch.setattr(Path, "is_dir", lambda path: False if path == root else original_is_dir(path))
     monkeypatch.setattr("app.ui.main_window.scan_library", lambda *args: (_ for _ in ()).throw(
         AssertionError("Startup should restore the index without enumerating directories")))
     window = MainWindow(settings)
@@ -74,9 +75,11 @@ def test_changed_photo_is_readable_from_restored_index_without_refresh(tmp_path,
         window.safe_page.resume.click()
         wait_until(qapp, lambda: window.scan is None and len(window.items) == 1)
         window.select_route(("month", 2026, 10))
-        window.thumbnails.get(entries[0])
-        wait_until(qapp, lambda: cache_key(entries[0]) in window.thumbnails.memory)
-        pixmap, error = window.thumbnails.get(entries[0])
+        current = window.items[0]
+        assert current.path == entries[0].path and current.mtime_ns != entries[0].mtime_ns
+        window.thumbnails.get(current)
+        wait_until(qapp, lambda: cache_key(current) in window.thumbnails.memory)
+        pixmap, error = window.thumbnails.get(current)
         assert not error and not pixmap.isNull()
         assert pixmap.toImage().pixelColor(10, 10).blue() > 200
         assert "文件已更改" not in window.grid.model().index(0, 0).data(Qt.ItemDataRole.ToolTipRole)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +17,7 @@ class MediaItem:
     taken_at: datetime | None
     size: int
     mtime_ns: int
+    library_key: str = field(default="", compare=False)
 
     @property
     def date_label(self) -> str:

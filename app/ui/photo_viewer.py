@@ -1,35 +1,132 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QRunnable, QSize, QThreadPool, Qt, Signal, Slot
-from PySide6.QtGui import QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from threading import Event
+import weakref
+
+from PySide6.QtCore import QEvent, QObject, QSize, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut, QTransform
 from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QLabel, QPushButton, QStackedWidget, QToolButton, QVBoxLayout)
+                               QApplication, QLabel, QPushButton, QStackedWidget, QToolButton, QVBoxLayout)
 
 from app.core.library import MediaItem
-from app.services.images import image_error_message, read_image
+from app.services.images import ImageReadCancelled, image_error_message, read_image
 from app.ui.theme import apply_window_chrome, asset_path, tinted_icon, tinted_pixmap, viewer_stylesheet
 from app.ui.video_player import VideoPlayer
 
 
 class ImageSignals(QObject):
-    done = Signal(int, QImage, str)
+    done = Signal(object, QImage, str)
 
 
-class ImageTask(QRunnable):
-    def __init__(self, item, token):
-        super().__init__()
-        self.item, self.token = item, token
-        self.signals = ImageSignals()
+@dataclass
+class DecodeRequest:
+    owner: object
+    owner_id: int
+    item: MediaItem
+    token: int
+    edge: int | None
+    cancel: Event = field(default_factory=Event)
+
+
+class ImageTask:
+    def __init__(self, request, signals):
+        self.request = request
+        self.signals = signals
 
     def run(self):
         try:
-            image = read_image(self.item.path)
-            self.signals.done.emit(self.token, image, "")
+            image = read_image(self.request.item.path, self.request.edge, cancel=self.request.cancel)
+            if self.request.cancel.is_set():
+                image = QImage()
+            self.signals.done.emit(self.request, image, "")
+        except ImageReadCancelled:
+            self.signals.done.emit(self.request, QImage(), "")
         except Exception as exc:
-            self.signals.done.emit(self.token, QImage(), image_error_message(exc))
+            self.signals.done.emit(self.request, QImage(), image_error_message(exc))
+
+
+class ImageDecoder(QObject):
+    """One raster at a time across viewers; pending requests carry no pixel data.
+
+    The application owns this object until its active task finishes. A closed
+    viewer never waits for a disk read and cannot be revived by an old result.
+    """
+    def __init__(self):
+        super().__init__(QApplication.instance())
+        self.pool = QThreadPool(self)
+        self.pool.setMaxThreadCount(1)
+        # The GUI-owned emitter outlives every job. Per-QRunnable signal
+        # objects can be deleted while emit() is still returning on Windows.
+        self.signals = ImageSignals(self)
+        self.signals.done.connect(self._finished, Qt.ConnectionType.QueuedConnection)
+        self.active = None
+        self.pending = OrderedDict()
+
+    def request(self, owner, item, token, edge):
+        self.cancel_owner(id(owner))
+        request = DecodeRequest(weakref.ref(owner), id(owner), item, token, edge)
+        self.pending[request.owner_id] = request
+        self._start_next()
+        return request
+
+    def cancel_owner(self, owner_id):
+        pending = self.pending.pop(owner_id, None)
+        if pending is not None:
+            pending.cancel.set()
+        if self.active is not None and self.active.request.owner_id == owner_id:
+            self.active.request.cancel.set()
+
+    def _start_next(self):
+        if self.active is not None:
+            return
+        while self.pending:
+            _, request = self.pending.popitem(last=False)
+            owner = request.owner()
+            if request.cancel.is_set() or owner is None or owner._closed:
+                continue
+            self.active = task = ImageTask(request, self.signals)
+            self.pool.start(task.run)
+            break
+
+    @Slot(object, QImage, str)
+    def _finished(self, request, image, error):
+        self.active = None
+        owner = request.owner()
+        if not request.cancel.is_set() and owner is not None and not owner._closed:
+            owner.loaded(request.token, image, error)
+        self._start_next()
+
+
+_image_decoder = None
+
+
+def image_decoder():
+    global _image_decoder
+    if _image_decoder is None:
+        _image_decoder = ImageDecoder()
+    return _image_decoder
+
+
+def has_pending_decodes():
+    """The main window defers final application exit while this is true."""
+    return bool(_image_decoder is not None and (
+        _image_decoder.active is not None or _image_decoder.pending
+        or _image_decoder.pool.activeThreadCount()))
+
+
+def cancel_pending_decodes():
+    if _image_decoder is not None:
+        for owner_id in list(_image_decoder.pending):
+            _image_decoder.cancel_owner(owner_id)
+        if _image_decoder.active is not None:
+            _image_decoder.active.request.cancel.set()
 
 
 class ZoomView(QGraphicsView):
+    detail_requested = Signal()
+    preview_resized = Signal()
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
@@ -47,12 +144,15 @@ class ZoomView(QGraphicsView):
     def actual(self):
         self.fit_mode = False
         self.resetTransform()
+        self.detail_requested.emit()
 
     def zoom(self, factor):
         self.fit_mode = False
         next_scale = self.transform().m11() * factor
         if 0.01 <= next_scale <= 30:
             self.scale(factor, factor)
+            if factor > 1:
+                self.detail_requested.emit()
 
     def wheelEvent(self, event):
         self.zoom(1.2 if event.angleDelta().y() > 0 else 1 / 1.2)
@@ -62,6 +162,7 @@ class ZoomView(QGraphicsView):
         super().resizeEvent(event)
         if self.fit_mode:
             self.fit()
+            self.preview_resized.emit()
 
 
 class PhotoViewer(QDialog):
@@ -70,8 +171,17 @@ class PhotoViewer(QDialog):
         self.items, self.position = list(items), position
         self.token = 0
         self.jobs = {}
-        self.pool = QThreadPool(self)
-        self.pool.setMaxThreadCount(1)
+        self._closed = False
+        self._is_full = False
+        self._full_requested = False
+        self._preview_edge = 0
+        self.decoder = image_decoder()
+        self.pool = self.decoder.pool
+        owner_id, decoder = id(self), self.decoder
+        self.destroyed.connect(lambda: decoder.cancel_owner(owner_id))
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self.resize_preview)
         self.setObjectName("photoViewer")
         self.setStyleSheet(viewer_stylesheet())
         self.setWindowTitle("ChronoView · 查看")
@@ -116,6 +226,8 @@ class PhotoViewer(QDialog):
         # --- Stage ---
         self.pages = QStackedWidget()
         self.view = ZoomView()
+        self.view.detail_requested.connect(self.request_original)
+        self.view.preview_resized.connect(lambda: self._preview_timer.start(150))
         self.video = VideoPlayer()
         self.video.fullscreen_requested.connect(self.toggle_fullscreen)
         if hasattr(self.video, "navigate_requested"):
@@ -191,6 +303,21 @@ class PhotoViewer(QDialog):
         super().showEvent(event)
         apply_window_chrome(self, True)
 
+    def reopen(self, items, position):
+        self.items, self.position = items, position
+        self._closed = False
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
+        self.pages.setCurrentWidget(self.message)
+        self.message.setText("正在读取…")
+        self.show()
+        self.load()
+
+    def dispose(self):
+        self.retain_video_engine = False
+        self.close()
+        if hasattr(self.video, "shutdown"):
+            self.video.shutdown()
+
     def navigation_button(self, icon, name, direction):
         button = QToolButton(self.view.viewport())
         button.setObjectName("viewerArrow")
@@ -257,11 +384,15 @@ class PhotoViewer(QDialog):
             self.load()
 
     def load(self):
+        if self._closed:
+            return
         self.token += 1
         self.video.release()
-        self.pool.clear()
-        # Retain only running tasks. Cleared queued tasks never emit a signal.
-        self.jobs = {key: task for key, task in self.jobs.items() if key >= self.token - 2}
+        self.decoder.cancel_owner(id(self))
+        self.jobs.clear()
+        self._preview_timer.stop()
+        self._is_full = self._full_requested = False
+        self._preview_edge = 0
         item = self.items[self.position]
         for button in self.photo_tools:
             button.setVisible(item.kind == "image")
@@ -273,29 +404,63 @@ class PhotoViewer(QDialog):
         self.photo_previous.setEnabled(self.position > 0)
         self.photo_following.setEnabled(self.position < len(self.items) - 1)
         self.view.scene().clear()
+        self.view.scene().setSceneRect(0, 0, 0, 0)
+        self.view.fit_mode = True
         self.pages.setCurrentWidget(self.message)
         if item.kind == "video":
             self.pages.setCurrentWidget(self.video)
             self.video.load(item.path)
             return
         self.message.setText("正在读取照片…")
-        task = ImageTask(item, self.token)
-        task.signals.done.connect(self.loaded, Qt.ConnectionType.QueuedConnection)
-        self.jobs[self.token] = task
-        self.pool.start(task)
+        self.submit_decode(self.preview_edge())
+
+    def preview_edge(self):
+        return max(2048, int(max(self.view.viewport().width(), self.view.viewport().height())
+                             * self.view.devicePixelRatioF()))
+
+    def submit_decode(self, edge):
+        if edge is not None:
+            self._preview_edge = edge
+        self.jobs[self.token] = self.decoder.request(self, self.items[self.position], self.token, edge)
+
+    def request_original(self):
+        if (not self._closed and self.items[self.position].kind == "image"
+                and not self._is_full and not self._full_requested):
+            self._full_requested = True
+            self.submit_decode(None)
+
+    def resize_preview(self):
+        if (not self._closed and self.pages.currentWidget() is self.view and self.view.fit_mode
+                and not self._is_full and not self._full_requested and self.preview_edge() > self._preview_edge):
+            self.submit_decode(self.preview_edge())
 
     def loaded(self, token, image, error):
         self.jobs.pop(token, None)
-        if token != self.token:
+        if token != self.token or self._closed:
             return
         if error or image.isNull():
             self.message.setText("无法读取此照片\n\n文件可能损坏、解码器不可用，或移动硬盘已断开。\n\n" + error)
+            self.pages.setCurrentWidget(self.message)
+            self._full_requested = False
             return
+        original_width = int(image.text("chronoview.original_width") or image.width())
+        original_height = int(image.text("chronoview.original_height") or image.height())
+        self._is_full = image.width() >= original_width and image.height() >= original_height
+        had_image = bool(self.view.scene().items())
+        transform = self.view.transform()
+        center = self.view.mapToScene(self.view.viewport().rect().center())
         pixmap = QPixmap.fromImage(image)
-        self.view.scene().addPixmap(pixmap)
-        self.view.scene().setSceneRect(pixmap.rect())
+        self.view.scene().clear()
+        item = self.view.scene().addPixmap(pixmap)
+        item.setTransform(QTransform.fromScale(original_width / pixmap.width(), original_height / pixmap.height()))
+        self.view.scene().setSceneRect(0, 0, original_width, original_height)
         self.pages.setCurrentWidget(self.view)
-        self.view.fit()
+        if self.view.fit_mode:
+            self.view.fit()
+            self._preview_timer.start(150)
+        else:
+            self.view.setTransform(transform)
+            self.view.centerOn(center if had_image else self.view.sceneRect().center())
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -312,10 +477,23 @@ class PhotoViewer(QDialog):
         self.toggle_fullscreen() if self.isFullScreen() else self.close()
 
     def closeEvent(self, event):
+        self._closed = True
         self.token += 1
+        self._preview_timer.stop()
+        self.decoder.cancel_owner(id(self))
+        self.jobs.clear()
+        self.view.scene().clear()
         self.video.release()
-        if hasattr(self.video, "shutdown"):
+        if hasattr(self.video, "shutdown") and not getattr(self, "retain_video_engine", False):
             self.video.shutdown()
-        self.pool.clear()
-        self.pool.waitForDone()
+        self.items = []
+        self.title.clear()
+        self.title.setToolTip("")
+        self.info.clear()
+        if getattr(self, "retain_video_engine", False):
+            # QDialog's normal close destroys/recreates native child HWNDs.
+            # Hide exits its modal loop while preserving libmpv's bound surface.
+            event.ignore()
+            self.hide()
+            return
         super().closeEvent(event)

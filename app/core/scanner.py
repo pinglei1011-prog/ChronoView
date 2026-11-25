@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
@@ -8,6 +9,7 @@ from typing import Callable
 
 from app.core.filename_parser import parse_filename
 from app.core.library import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MediaItem
+from app.storage.identity import LibraryIdentity, library_identity
 
 
 @dataclass
@@ -21,6 +23,9 @@ class ScanResult:
     from_index: bool = False
     offline: bool = False
     index_warning: str = ""
+    library_identity: LibraryIdentity | None = None
+    identity_changed: bool = False
+    library_key: str = ""
 
     def add_error(self, path: Path, exc: OSError) -> None:
         self.error_count += 1
@@ -39,8 +44,15 @@ def scan_library(root: Path, cancel: Event | None = None,
     root = Path(os.path.abspath(root))
     result = ScanResult()
     cancel = cancel or Event()
+    if cancel.is_set():
+        result.cancelled = True
+        return result
+    result.library_identity = library_identity(root)
+    result.library_key = (result.library_identity.key if result.library_identity is not None
+                          else "unverified:" + uuid.uuid4().hex)
     if not root.is_dir():
         result.unavailable = True
+        result.offline = True
         result.add_error(root, OSError("照片库不可访问，请检查硬盘连接或重新选择文件夹"))
         return result
     stack = [root]
@@ -72,7 +84,8 @@ def scan_library(root: Path, cancel: Event | None = None,
                         stat = entry.stat(follow_symlinks=False)
                         path = Path(entry.path)
                         item = MediaItem(path, "video" if suffix in VIDEO_EXTENSIONS else "image",
-                                         parse_filename(path), stat.st_size, stat.st_mtime_ns)
+                                         parse_filename(path), stat.st_size, stat.st_mtime_ns,
+                                         library_key=result.library_key)
                         result.items.append(item)
                         pending.append(item)
                         if len(pending) >= 256:
@@ -91,7 +104,15 @@ def scan_library(root: Path, cancel: Event | None = None,
                 result.unavailable = True
     if pending and batch and not result.cancelled:
         batch(pending)
+    if cancel.is_set():
+        result.cancelled = True
+        return result
     # Root disappearing mid-scan must never replace a previously loaded snapshot.
     if not root.is_dir():
         result.unavailable = True
+        result.offline = True
+    elif library_identity(root) != result.library_identity:
+        result.identity_changed = True
+        result.unavailable = True
+        result.add_error(root, OSError("扫描期间硬盘身份发生变化，请重新选择照片库"))
     return result

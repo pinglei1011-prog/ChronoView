@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import faulthandler
 import sys
 from pathlib import Path
 
@@ -19,16 +18,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from app.ui.main_window import MainWindow
 from app import __version__
 
-_native_crash_log = None
-
-
 def main() -> int:
-    global _native_crash_log
     parser = argparse.ArgumentParser(description="ChronoView 本地照片浏览器")
     parser.add_argument("--library", type=Path, help="首次打开的照片库路径")
     parser.add_argument("--settings-file", type=Path, help="使用独立设置文件（测试用）")
     parser.add_argument("--smoke-test", action="store_true", help="启动两秒后退出（测试用）")
     parser.add_argument("--verify-media", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--verify-local-data", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--measure-video", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--measurement-report", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--measurement-seconds", type=float, default=8, help=argparse.SUPPRESS)
@@ -44,14 +40,12 @@ def main() -> int:
     asset_root = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
     icon = QIcon(str(asset_root / "assets" / "chronoview.svg"))
     app.setWindowIcon(icon)
-    log_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
+    log_dir = (args.settings_file.absolute().parent / "logs" if args.settings_file else
+               Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)))
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        from logging.handlers import RotatingFileHandler
-        handler = RotatingFileHandler(log_dir / "chronoview.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
-        logging.basicConfig(level=logging.INFO, handlers=[handler])
-        _native_crash_log = (log_dir / "native-crash.log").open("a", encoding="utf-8")
-        faulthandler.enable(file=_native_crash_log, all_threads=True)
+        from app.services.local_logs import configure_logs
+        configure_logs(log_dir)
     except OSError:
         logging.basicConfig(level=logging.INFO)
 
@@ -76,7 +70,7 @@ def main() -> int:
     window.show()
     if args.verify_media:
         from app.diagnostics import MediaVerification
-        window.verification = MediaVerification(window, args.verify_media)
+        window.verification = MediaVerification(window, args.verify_media, args.verify_local_data)
     if args.smoke_test:
         QTimer.singleShot(2000, window.close)
     return app.exec()

@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 if (-not $Compiler) {
     $candidates = @(
-        (Join-Path $projectRoot 'work\release-1.1\tools\InnoSetup\ISCC.exe'),
+        (Join-Path $projectRoot 'tools\InnoSetup\ISCC.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')
     )
